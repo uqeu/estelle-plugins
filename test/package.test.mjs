@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, access, mkdtemp, cp, writeFile, rm } from 'node:fs/promises';
+import { readFile, access, mkdtemp, cp, writeFile, rm, readdir } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { join, resolve, relative, isAbsolute } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -11,8 +11,8 @@ const json = async file => JSON.parse(await readFile(join(root, file), 'utf8'));
 
 test('native packages use bundled local runners and respect host teardown contracts', async () => {
   for (const [file, variable, host] of [
-    ['hooks/claude.json', 'CLAUDE_PLUGIN_ROOT', 'claude-code'],
-    ['hooks/codex.json', 'PLUGIN_ROOT', 'codex'],
+    ['plugins/claude/hooks/hooks.json', 'CLAUDE_PLUGIN_ROOT', 'claude-code'],
+    ['plugins/codex/hooks/hooks.json', 'PLUGIN_ROOT', 'codex'],
     ['plugins/grok/hooks/hooks.json', 'GROK_PLUGIN_ROOT', 'grok'],
   ]) {
     const config = await json(file);
@@ -29,7 +29,7 @@ test('native packages use bundled local runners and respect host teardown contra
       }
     }
   }
-  const kimi = await json('kimi.plugin.json');
+  const kimi = await json('plugins/kimi/kimi.plugin.json');
   assert.equal(kimi.sessionStart.skill, 'estelle');
   assert.equal(kimi.mcpServers.Estelle.bearerTokenEnvVar, 'ESTELLE_API_KEY');
   for (const hook of kimi.hooks) {
@@ -40,9 +40,10 @@ test('native packages use bundled local runners and respect host teardown contra
 
 test('every host keeps its own manifest paths inside the installed package', async () => {
   for (const [packageRoot, manifestFile] of [
-    ['plugins/estelle', '.claude-plugin/plugin.json'],
-    ['plugins/estelle', '.codex-plugin/plugin.json'],
+    ['plugins/claude', '.claude-plugin/plugin.json'],
+    ['plugins/codex', '.codex-plugin/plugin.json'],
     ['plugins/grok', 'plugin.json'],
+    ['plugins/cursor', '.cursor-plugin/plugin.json'],
   ]) {
     const base = join(root, packageRoot);
     const manifest = JSON.parse(await readFile(join(base, manifestFile), 'utf8'));
@@ -58,12 +59,49 @@ test('every host keeps its own manifest paths inside the installed package', asy
     await access(join(base, 'runtime', 'cli.mjs'));
     await access(join(base, 'runtime', 'kimi-history.mjs'));
   }
-  const codex = await json('.mcp.codex.json');
-  const claude = await json('.mcp.claude.json');
+  const codex = await json('plugins/codex/.mcp.json');
+  const claude = await json('plugins/claude/.mcp.json');
   const grok = await json('plugins/grok/.mcp.json');
   assert.equal(codex.mcpServers.Estelle.bearer_token_env_var, 'ESTELLE_API_KEY');
   assert.equal(grok.mcpServers.Estelle.bearer_token_env_var, 'ESTELLE_API_KEY');
   assert.equal(claude.mcpServers.Estelle.headers.Authorization, 'Bearer ${ESTELLE_API_KEY}');
+});
+
+test('five host folders have separate native discovery and exclude development notes or cross-host manifests', async () => {
+  const hosts = ['claude', 'codex', 'cursor', 'grok', 'kimi'];
+  assert.deepEqual((await readdir(join(root, 'plugins'))).sort(), hosts);
+  for (const [file, host] of [['.claude-plugin/marketplace.json', 'claude'],
+    ['.agents/plugins/marketplace.json', 'codex'], ['.cursor-plugin/marketplace.json', 'cursor']]) {
+    assert.equal((await json(file)).plugins[0].source, `./plugins/${host}`);
+  }
+  const manifestPaths = { claude: '.claude-plugin', codex: '.codex-plugin', cursor: '.cursor-plugin',
+    grok: 'plugin.json', kimi: 'kimi.plugin.json' };
+  for (const host of hosts) {
+    const files = await readdir(join(root, 'plugins', host));
+    for (const forbidden of ['docs', 'test', 'CONTEXT.md', 'DECISIONS.md', ...Object.entries(manifestPaths)
+      .filter(([other]) => other !== host).map(([, path]) => path)]) assert(!files.includes(forbidden), `${host}: ${forbidden}`);
+    await access(join(root, 'docs', 'install', `${host}.md`));
+  }
+  for (const forbidden of ['CONTEXT.md', 'DECISIONS.md', 'docs/VERIFICATION.md', 'docs/research']) {
+    await assert.rejects(access(join(root, forbidden)), { code: 'ENOENT' });
+  }
+});
+
+test('Cursor manifests use its strict native fields, flat hooks and per-user environment reference', async () => {
+  const manifest = await json('plugins/cursor/.cursor-plugin/plugin.json');
+  assert.deepEqual(Object.keys(manifest).sort(), ['author', 'commands', 'description', 'hooks', 'license',
+    'mcpServers', 'name', 'rules', 'skills', 'version']);
+  const hooks = await json('plugins/cursor/hooks/hooks.json');
+  assert.equal(hooks.version, 1);
+  assert(!Object.hasOwn(hooks.hooks, 'afterAgentThought'));
+  assert(!Object.hasOwn(hooks.hooks, 'PreToolUse'));
+  for (const [event, rows] of Object.entries(hooks.hooks)) for (const row of rows) {
+    assert.deepEqual(Object.keys(row).sort(), ['command', 'timeout']);
+    assert.equal(row.command, 'node "${CURSOR_PLUGIN_ROOT}/runtime/cli.mjs" hook cursor');
+    assert.equal(row.timeout, event === 'sessionEnd' ? 3 : 20);
+  }
+  assert.equal((await json('plugins/cursor/mcp.json')).mcpServers.Estelle.headers.Authorization,
+    'Bearer ${env:ESTELLE_API_KEY}');
 });
 
 test('generated artifact check detects a changed runner rather than trusting a source-only pass', async t => {
@@ -74,9 +112,9 @@ test('generated artifact check detects a changed runner rather than trusting a s
     cwd: temporary, encoding: 'utf8', timeout: 10_000, maxBuffer: 100_000,
   });
   assert.equal(run().status, 0);
-  const runner = join(temporary, 'plugins', 'estelle', 'runtime', 'cli.mjs');
+  const runner = join(temporary, 'plugins', 'codex', 'runtime', 'cli.mjs');
   await writeFile(runner, '// deliberately broken generated runner\n');
   const broken = run();
   assert.notEqual(broken.status, 0);
-  assert.match(broken.stderr, /Bundle differs: estelle\/runtime/);
+  assert.match(broken.stderr, /Bundle differs: codex\/runtime/);
 });

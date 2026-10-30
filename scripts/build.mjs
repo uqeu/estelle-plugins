@@ -1,55 +1,66 @@
 import { cp, mkdir, readdir, readFile, writeFile, rm } from 'node:fs/promises';
+import { statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
+import { HOOK_EVENTS as CURSOR_EVENTS } from '../adapters/cursor.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const check = process.argv.includes('--check');
 const version = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).version;
 const description = 'Estelle MCP, memory and session hooks for coding agents.';
-const json = value => JSON.stringify(value, null, 2) + '\n';
 const generated = new Map();
+const json = value => JSON.stringify(value, null, 2) + '\n';
 const emit = (file, value) => generated.set(file, typeof value === 'string' ? value : json(value));
-emit('runtime/version.mjs', `// Generated from package.json by scripts/build.mjs.\nexport const VERSION = '${version}';\n`);
-const server = { url: 'https://api.fatelabs.ca/mcp', bearer_token_env_var: 'ESTELLE_API_KEY' };
-const manifests = {
-  '.claude-plugin/plugin.json': { name: 'estelle', version, description, license: 'Apache-2.0', author: { name: 'Fate Labs' },
-    repository: 'https://github.com/uqeu/estelle-plugins', hooks: './hooks/claude.json', mcpServers: './.mcp.claude.json' },
-  '.codex-plugin/plugin.json': { name: 'estelle', version, description, skills: './skills',
-    hooks: './hooks/codex.json', mcpServers: './.mcp.codex.json' },
-};
-for (const [file, manifest] of Object.entries(manifests)) emit(file, manifest);
-emit('.mcp.codex.json', { mcpServers: { Estelle: server } });
-emit('.mcp.claude.json', { mcpServers: { Estelle: { type: 'http', url: server.url,
-  headers: { Authorization: 'Bearer ${ESTELLE_API_KEY}' } } } });
-
 const command = (host, variable) => `node "\${${variable}}/runtime/cli.mjs" hook ${host}`;
-const commonEvents = ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop', 'SubagentStart',
+const common = ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop', 'SubagentStart',
   'SubagentStop', 'PreCompact', 'SessionEnd', 'PreToolUse'];
-function hooksFor(host, variable, events) {
+const server = { url: 'https://api.fatelabs.ca/mcp', bearer_token_env_var: 'ESTELLE_API_KEY' };
+const manifest = { name: 'estelle', version, description };
+const marketplace = host => ({ name: 'estelle-plugins', owner: { name: 'Fate Labs' },
+  plugins: [{ name: 'estelle', source: `./plugins/${host}` }] });
+emit('runtime/version.mjs', `// Generated from package.json by scripts/build.mjs.\nexport const VERSION = '${version}';\n`);
+emit('.claude-plugin/marketplace.json', marketplace('claude'));
+emit('.agents/plugins/marketplace.json', marketplace('codex'));
+emit('.grok-plugin/marketplace.json', { name: 'estelle-plugins', plugins: [{ name: 'estelle', source: './plugins/grok' }] });
+emit('.cursor-plugin/marketplace.json', marketplace('cursor'));
+
+function nativeHooks(host, variable, events) {
   return { hooks: Object.fromEntries(events.map(event => [event, [{ hooks: [{ type: 'command',
-    command: command(host, variable), timeout: ['SessionEnd', 'Interrupt'].includes(event) ? 3 : 20,
-  }] }]])) };
+    command: command(host, variable), timeout: ['SessionEnd', 'Interrupt'].includes(event) ? 3 : 20 }],
+  }]])) };
 }
-emit('hooks/claude.json', hooksFor('claude-code', 'CLAUDE_PLUGIN_ROOT', commonEvents));
-emit('hooks/codex.json', hooksFor('codex', 'PLUGIN_ROOT', [...commonEvents, 'PostCompact', 'Interrupt',
+emit('plugins/claude/.claude-plugin/plugin.json', { ...manifest, license: 'Apache-2.0', author: { name: 'Fate Labs' },
+  repository: 'https://github.com/uqeu/estelle-plugins', hooks: './hooks/hooks.json', mcpServers: './.mcp.json' });
+emit('plugins/claude/.mcp.json', { mcpServers: { Estelle: { type: 'http', url: server.url,
+  headers: { Authorization: 'Bearer ${ESTELLE_API_KEY}' } } } });
+emit('plugins/claude/hooks/hooks.json', nativeHooks('claude-code', 'CLAUDE_PLUGIN_ROOT', common));
+emit('plugins/codex/.codex-plugin/plugin.json', { ...manifest, skills: './skills',
+  hooks: './hooks/hooks.json', mcpServers: './.mcp.json' });
+emit('plugins/codex/.mcp.json', { mcpServers: { Estelle: server } });
+emit('plugins/codex/hooks/hooks.json', nativeHooks('codex', 'PLUGIN_ROOT', [...common, 'PostCompact', 'Interrupt',
   'PreModelRequest', 'PostModelRequest']));
-emit('kimi.plugin.json', { name: 'estelle', version, description, skills: ['./skills'],
-  commands: ['./commands'], sessionStart: { skill: 'estelle' },
+emit('plugins/kimi/kimi.plugin.json', { ...manifest, skills: ['./skills'], commands: ['./commands'],
+  sessionStart: { skill: 'estelle' },
   mcpServers: { Estelle: { transport: 'http', url: server.url, bearerTokenEnvVar: 'ESTELLE_API_KEY' } },
-  hooks: [...commonEvents, 'PostCompact', 'Interrupt', 'SessionHeartbeat', 'PostToolUseFailure']
+  hooks: [...common, 'PostCompact', 'Interrupt', 'SessionHeartbeat', 'PostToolUseFailure']
     .map(event => ({ event, command: command('kimi', 'KIMI_PLUGIN_ROOT'), timeout: ['SessionEnd', 'Interrupt'].includes(event) ? 3 : 20 })),
 });
-const marketplace = { name: 'estelle-plugins', owner: { name: 'Fate Labs' },
-  plugins: [{ name: 'estelle', source: './plugins/estelle', description, version }] };
-emit('.claude-plugin/marketplace.json', marketplace);
-emit('.grok-plugin/marketplace.json', { name: 'estelle-plugins', plugins: [{ name: 'estelle', source: './plugins/grok' }] });
-emit('plugins/grok/plugin.json', { name: 'estelle', version, description, skills: './skills',
-  commands: './commands', hooks: './hooks/hooks.json', mcpServers: './.mcp.json' });
+emit('plugins/grok/plugin.json', { ...manifest, skills: './skills', commands: './commands',
+  hooks: './hooks/hooks.json', mcpServers: './.mcp.json' });
 emit('plugins/grok/.mcp.json', { mcpServers: { Estelle: server } });
-emit('plugins/grok/hooks/hooks.json', hooksFor('grok', 'GROK_PLUGIN_ROOT', commonEvents));
+emit('plugins/grok/hooks/hooks.json', nativeHooks('grok', 'GROK_PLUGIN_ROOT', common));
+emit('plugins/cursor/.cursor-plugin/plugin.json', { ...manifest, author: { name: 'Fate Labs' }, license: 'Apache-2.0',
+  skills: './skills', commands: './commands', rules: './rules', hooks: './hooks/hooks.json', mcpServers: './mcp.json' });
+emit('plugins/cursor/mcp.json', { mcpServers: { Estelle: { url: server.url,
+  headers: { Authorization: 'Bearer ${env:ESTELLE_API_KEY}' } } } });
+emit('plugins/cursor/hooks/hooks.json', { version: 1, hooks: Object.fromEntries(CURSOR_EVENTS.map(event => [event,
+  [{ command: command('cursor', 'CURSOR_PLUGIN_ROOT'), timeout: event === 'sessionEnd' ? 3 : 20 }]])) });
+emit('plugins/cursor/rules/estelle.mdc', '---\ndescription: Use Estelle tools for repository context and shared work\nalwaysApply: true\n---\n'
+  + await readFile(join(root, 'instructions.md'), 'utf8'));
 
-const ASSETS = ['runtime', 'adapters', 'skills', 'agents', 'commands', 'docs', 'instructions.md', 'README.md', 'LICENSE', 'NOTICE'];
-const NATIVE = Object.keys(manifests).concat(['.mcp.codex.json', '.mcp.claude.json', 'hooks/claude.json', 'hooks/codex.json', 'kimi.plugin.json']);
+const HOSTS = ['claude', 'codex', 'kimi', 'grok', 'cursor'];
+const ASSETS = ['runtime', 'adapters', 'skills', 'instructions.md', 'LICENSE', 'NOTICE'];
+const assetsFor = host => [...ASSETS, ...(host === 'codex' ? [] : ['commands']), ...(host === 'claude' ? ['agents'] : [])];
 async function inventory(directory, prefix = '') {
   const output = new Map();
   for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -61,6 +72,15 @@ async function inventory(directory, prefix = '') {
   }
   return output;
 }
+const digest = async path => statSync(path).isDirectory() ? inventory(path)
+  : new Map([['file', createHash('sha256').update(await readFile(path)).digest('hex')]]);
+if (!check) {
+  // Regenerate the distribution only; source/runtime/tests and user installations are untouched.
+  await rm(join(root, 'plugins'), { recursive: true, force: true });
+  for (const file of ['.claude-plugin/plugin.json', '.codex-plugin', '.mcp.claude.json', '.mcp.codex.json', 'hooks', 'kimi.plugin.json']) {
+    await rm(join(root, file), { recursive: true, force: true });
+  }
+}
 for (const [file, content] of generated) {
   if (check) {
     if (await readFile(join(root, file), 'utf8') !== content) throw new Error(`Generated file differs: ${file}`);
@@ -69,25 +89,11 @@ for (const [file, content] of generated) {
     await writeFile(join(root, file), content);
   }
 }
-for (const host of ['estelle', 'grok']) {
-  const destination = join(root, 'plugins', host);
-  for (const asset of ASSETS) {
-    const original = join(root, asset);
-    const target = join(destination, asset);
-    if (!check) { await rm(target, { recursive: true, force: true }); await cp(original, target, { recursive: true }); }
-    else {
-      const sourceRows = (await import('node:fs')).statSync(original).isDirectory()
-        ? await inventory(original) : new Map([['file', createHash('sha256').update(await readFile(original)).digest('hex')]]);
-      const targetRows = (await import('node:fs')).statSync(target).isDirectory()
-        ? await inventory(target) : new Map([['file', createHash('sha256').update(await readFile(target)).digest('hex')]]);
-      if (JSON.stringify([...sourceRows].sort()) !== JSON.stringify([...targetRows].sort())) throw new Error(`Bundle differs: ${host}/${asset}`);
-    }
-  }
-  if (host !== 'estelle') continue;
-  for (const file of NATIVE) {
-    const target = join(destination, file);
-    if (!check) { await mkdir(join(target, '..'), { recursive: true }); await cp(join(root, file), target); }
-    else if (await readFile(target, 'utf8') !== generated.get(file)) throw new Error(`Bundle manifest differs: ${file}`);
+for (const host of HOSTS) for (const asset of assetsFor(host)) {
+  const original = join(root, asset), target = join(root, 'plugins', host, asset);
+  if (!check) { await cp(original, target, { recursive: true }); continue; }
+  if (JSON.stringify([...(await digest(original))].sort()) !== JSON.stringify([...(await digest(target))].sort())) {
+    throw new Error(`Bundle differs: ${host}/${asset}`);
   }
 }
 console.log(`Estelle plugins ${version}: ${check ? 'checked' : 'built'}`);

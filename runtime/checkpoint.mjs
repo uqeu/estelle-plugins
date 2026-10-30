@@ -128,6 +128,7 @@ export async function readTranscriptMessages({ path, host, subagent = false }) {
 
 /** SessionEnd is deliberately delegated to the caller's durable reference queue, without filesystem/network work. */
 export async function checkpointSession({ payload, host, repo, stateDir, request }) {
+  if (host === 'cursor') return { saved: false, unsupported: true, reason: 'Cursor transcript dialect is not verified' };
   if (payload.hook_event_name === 'SessionEnd') return { saved: false, deferred: true };
   if (!safeSession(payload.session_id)) throw new Error('invalid host session identity');
   const child = payload.hook_event_name === 'SubagentStop';

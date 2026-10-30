@@ -6,9 +6,7 @@
   "plugins": [
     {
       "name": "estelle",
-      "source": "./plugins/estelle",
-      "description": "Estelle MCP, memory and session hooks for coding agents.",
-      "version": "0.0.1"
+      "source": "./plugins/claude"
     }
   ]
 }

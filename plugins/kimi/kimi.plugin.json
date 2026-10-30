@@ -1,0 +1,88 @@
+{
+  "name": "estelle",
+  "version": "0.0.2",
+  "description": "Estelle MCP, memory and session hooks for coding agents.",
+  "skills": [
+    "./skills"
+  ],
+  "commands": [
+    "./commands"
+  ],
+  "sessionStart": {
+    "skill": "estelle"
+  },
+  "mcpServers": {
+    "Estelle": {
+      "transport": "http",
+      "url": "https://api.fatelabs.ca/mcp",
+      "bearerTokenEnvVar": "ESTELLE_API_KEY"
+    }
+  },
+  "hooks": [
+    {
+      "event": "SessionStart",
+      "command": "node \"${KIMI_PLUGIN_ROOT}/runtime/cli.mjs\" hook kimi",
+      "timeout": 20
+    },
+    {
+      "event": "UserPromptSubmit",
+      "command": "node \"${KIMI_PLUGIN_ROOT}/runtime/cli.mjs\" hook kimi",
+      "timeout": 20
+    },
+    {
+      "event": "PostToolUse",
+      "command": "node \"${KIMI_PLUGIN_ROOT}/runtime/cli.mjs\" hook kimi",
+      "timeout": 20
+    },
+    {
+      "event": "Stop",
+      "command": "node \"${KIMI_PLUGIN_ROOT}/runtime/cli.mjs\" hook kimi",
+      "timeout": 20
+    },
+    {
+      "event": "SubagentStart",
+      "command": "node \"${KIMI_PLUGIN_ROOT}/runtime/cli.mjs\" hook kimi",
+      "timeout": 20
+    },
+    {
+      "event": "SubagentStop",
+      "command": "node \"${KIMI_PLUGIN_ROOT}/runtime/cli.mjs\" hook kimi",
+      "timeout": 20
+    },
+    {
+      "event": "PreCompact",
+      "command": "node \"${KIMI_PLUGIN_ROOT}/runtime/cli.mjs\" hook kimi",
+      "timeout": 20
+    },
+    {
+      "event": "SessionEnd",
+      "command": "node \"${KIMI_PLUGIN_ROOT}/runtime/cli.mjs\" hook kimi",
+      "timeout": 3
+    },
+    {
+      "event": "PreToolUse",
+      "command": "node \"${KIMI_PLUGIN_ROOT}/runtime/cli.mjs\" hook kimi",
+      "timeout": 20
+    },
+    {
+      "event": "PostCompact",
+      "command": "node \"${KIMI_PLUGIN_ROOT}/runtime/cli.mjs\" hook kimi",
+      "timeout": 20
+    },
+    {
+      "event": "Interrupt",
+      "command": "node \"${KIMI_PLUGIN_ROOT}/runtime/cli.mjs\" hook kimi",
+      "timeout": 3
+    },
+    {
+      "event": "SessionHeartbeat",
+      "command": "node \"${KIMI_PLUGIN_ROOT}/runtime/cli.mjs\" hook kimi",
+      "timeout": 20
+    },
+    {
+      "event": "PostToolUseFailure",
+      "command": "node \"${KIMI_PLUGIN_ROOT}/runtime/cli.mjs\" hook kimi",
+      "timeout": 20
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-// Native Codex 0.166.0 contract: docs/research/codex-contract.md.
+// Native Codex hook contract: https://github.com/openai/codex/tree/rust-v0.166.0/codex-rs/hooks
 export const HOOK_EVENTS = Object.freeze([
   'PreModelRequest', 'PostModelRequest', 'PreToolUse', 'PermissionRequest',
   'PostToolUse', 'PreCompact', 'PostCompact', 'SessionStart', 'SessionEnd',

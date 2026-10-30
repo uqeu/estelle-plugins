@@ -42,13 +42,19 @@ const [command, host] = process.argv.slice(2);
 if (command === 'doctor') {
   doctor().catch(error => { console.error(errorCode(error)); process.exitCode = 1; });
 } else if (command === 'hook') {
+  let payload;
   // Optional integration failures must not abort a user's turn. They remain visible in doctor.
   try {
-    const payload = await readInput();
+    payload = await readInput();
     const { handleHook } = await import('./hooks.mjs');
     const output = await handleHook({ host, payload, stateDir: stateDirectory(), request: apiClient() });
     if (output) console.log(JSON.stringify(output));
   } catch (error) {
+    if (host === 'cursor') {
+      const { defaultOutput } = await import('../adapters/cursor.mjs');
+      const output = defaultOutput(payload?.hook_event_name);
+      if (output) console.log(JSON.stringify(output));
+    }
     try {
       const directory = stateDirectory({ ...process.env, ESTELLE_PLUGIN_DATA: undefined });
       await recordStatus(directory, { host: /^[a-z-]+$/.test(host || '') ? host : 'unknown',
@@ -58,6 +64,6 @@ if (command === 'doctor') {
     }
   }
 } else {
-  console.error('Usage: node runtime/cli.mjs hook <claude-code|codex|kimi|grok> | doctor');
+  console.error('Usage: node runtime/cli.mjs hook <claude-code|codex|kimi|grok|cursor> | doctor');
   process.exitCode = 1;
 }

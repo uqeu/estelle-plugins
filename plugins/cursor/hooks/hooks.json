@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "node \"${CURSOR_PLUGIN_ROOT}/runtime/cli.mjs\" hook cursor",
+        "timeout": 20
+      }
+    ],
+    "sessionEnd": [
+      {
+        "command": "node \"${CURSOR_PLUGIN_ROOT}/runtime/cli.mjs\" hook cursor",
+        "timeout": 3
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "command": "node \"${CURSOR_PLUGIN_ROOT}/runtime/cli.mjs\" hook cursor",
+        "timeout": 20
+      }
+    ],
+    "preToolUse": [
+      {
+        "command": "node \"${CURSOR_PLUGIN_ROOT}/runtime/cli.mjs\" hook cursor",
+        "timeout": 20
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": "node \"${CURSOR_PLUGIN_ROOT}/runtime/cli.mjs\" hook cursor",
+        "timeout": 20
+      }
+    ],
+    "postToolUseFailure": [
+      {
+        "command": "node \"${CURSOR_PLUGIN_ROOT}/runtime/cli.mjs\" hook cursor",
+        "timeout": 20
+      }
+    ],
+    "subagentStart": [
+      {
+        "command": "node \"${CURSOR_PLUGIN_ROOT}/runtime/cli.mjs\" hook cursor",
+        "timeout": 20
+      }
+    ],
+    "subagentStop": [
+      {
+        "command": "node \"${CURSOR_PLUGIN_ROOT}/runtime/cli.mjs\" hook cursor",
+        "timeout": 20
+      }
+    ],
+    "preCompact": [
+      {
+        "command": "node \"${CURSOR_PLUGIN_ROOT}/runtime/cli.mjs\" hook cursor",
+        "timeout": 20
+      }
+    ],
+    "stop": [
+      {
+        "command": "node \"${CURSOR_PLUGIN_ROOT}/runtime/cli.mjs\" hook cursor",
+        "timeout": 20
+      }
+    ]
+  }
+}

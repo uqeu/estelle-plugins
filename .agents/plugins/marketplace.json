@@ -1,0 +1,12 @@
+{
+  "name": "estelle-plugins",
+  "owner": {
+    "name": "Fate Labs"
+  },
+  "plugins": [
+    {
+      "name": "estelle",
+      "source": "./plugins/codex"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "name": "estelle",
+  "version": "0.0.2",
+  "description": "Estelle MCP, memory and session hooks for coding agents.",
+  "license": "Apache-2.0",
+  "author": {
+    "name": "Fate Labs"
+  },
+  "repository": "https://github.com/uqeu/estelle-plugins",
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./.mcp.json"
+}

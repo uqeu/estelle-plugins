@@ -1,4 +1,4 @@
-// Official Grok Build source contract pinned in docs/research/ponytail-grok.md.
+// Native Grok Build lifecycle envelope; camelCase is authoritative.
 export const HOOK_EVENTS = Object.freeze([
   'SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure',
   'PermissionDenied', 'Stop', 'StopFailure', 'StopCancelled', 'Notification',

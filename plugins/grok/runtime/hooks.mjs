@@ -1,6 +1,5 @@
 import { join } from 'node:path';
-import { mkdir, opendir, unlink, rename, link } from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
+import { mkdir, opendir, unlink, rename } from 'node:fs/promises';
 import { normalize as claude, formatContext as claudeContext } from '../adapters/claude.mjs';
 import { normalize as codex, formatContext as codexContext } from '../adapters/codex.mjs';
 import { safeSession, hash, repository, readJson, writeJson, errorCode, recordStatus } from './io.mjs';
@@ -10,6 +9,7 @@ import { redact } from './redact.mjs';
 import { queueReindex } from './reindex.mjs';
 import { timelineIdentity } from './identity.mjs';
 import { mutatingTool, protectWrite } from './protect.mjs';
+import { beginContext, saveContext, takeContext } from './queued-context.mjs';
 
 const CHECKPOINT_EVENTS = new Set(['Stop', 'SubagentStop', 'PreCompact', 'Interrupt']);
 const STREAM_EVENTS = new Set(['UserPromptSubmit', 'PostToolUse', 'Stop', 'SubagentStop', 'PreCompact', 'Interrupt']);
@@ -31,6 +31,7 @@ async function adapter(host) {
   if (host === 'codex') return { normalize: codex, formatContext: codexContext };
   if (host === 'kimi') return import('../adapters/kimi.mjs');
   if (host === 'grok') return import('../adapters/grok.mjs');
+  if (host === 'cursor') return import('../adapters/cursor.mjs');
   throw new Error('unsupported_host');
 }
 
@@ -144,19 +145,30 @@ export async function handleHook({ host, payload, stateDir, request }) {
   const protection = protectWrite(n);
   if (protection?.unscanned) {
     await recordStatus(stateDir, { host, event: n.event, mode: 'protect', status: 'partial', code: 'input_bound' });
-    return port.formatContext('Estelle did not scan this edit for credential patterns because its structure exceeded the local scan bound. No clean result was established.', n.event);
+    return port.formatContext('Estelle did not scan this edit for credential patterns because its structure exceeded the local scan bound. No clean result was established.', n.event)
+      ?? port.defaultOutput?.(payload.hook_event_name) ?? null;
   }
-  if (protection) return protection;
+  if (protection) return host === 'cursor' ? { permission: 'deny',
+    user_message: protection.hookSpecificOutput.permissionDecisionReason,
+    agent_message: protection.hookSpecificOutput.permissionDecisionReason } : protection;
+  const defaultOutput = () => port.defaultOutput?.(payload.hook_event_name) ?? null;
+  const queuedContext = host === 'grok' || host === 'cursor';
   const grokContextPath = join(stateDir, 'context', `${hash(`${host}:${n.sessionId}`)}.json`);
-  if (host === 'grok' && n.event === 'UserPromptSubmit') {
-    await unlink(grokContextPath).catch(error => { if (error.code !== 'ENOENT') throw error; });
+  let contextRequest;
+  if (queuedContext && n.event === 'UserPromptSubmit') {
+    contextRequest = await beginContext(grokContextPath, n.turnId);
   }
   if (n.event === 'SessionEnd' || n.event === 'Interrupt') {
+    if (host === 'cursor') {
+      await recordStatus(stateDir, { host, event: n.event, mode: 'checkpoint', status: 'partial', code: 'unsupported_host' });
+      return null;
+    }
     await deferSession(n, stateDir);
     return null;
   }
   if (host === 'kimi' && port.getTranscriptPath) n.transcriptPath = await port.getTranscriptPath(n);
-  const streamPayload = { ...payload, transcript_path: n.transcriptPath || null };
+  const streamPayload = { ...payload, session_id: n.sessionId, cwd: n.cwd,
+    hook_event_name: n.event, transcript_path: n.transcriptPath || null };
   const repo = repository(n.cwd);
   const actions = [];
   const edited = n.event === 'PostToolUse' && mutatingTool(n.toolName)
@@ -176,36 +188,22 @@ export async function handleHook({ host, payload, stateDir, request }) {
     context = await runAction('context', n, stateDir, () => recall(n, repo, request));
   }
   await completedActions;
-  if (context?.failed) return port.formatContext(`Estelle recall was not obtained (${context.code}). Use its MCP tools directly; this is not an empty search result.`, n.event);
-  if (context?.text && host === 'grok') {
-    await writeJson(grokContextPath, {
-      text: context.text, turnId: n.turnId, emitted: false,
-    });
-    await recordStatus(stateDir, { host, event: n.event, mode: 'context', status: 'pending' });
-    return null;
+  if (context?.failed) return port.formatContext(`Estelle recall was not obtained (${context.code}). Use its MCP tools directly; this is not an empty search result.`, n.event) ?? defaultOutput();
+  if (context?.text && queuedContext) {
+    const saved = await saveContext(grokContextPath, n.turnId, contextRequest, context.text);
+    await recordStatus(stateDir, { host, event: n.event, mode: 'context', status: saved ? 'pending' : 'skipped' });
+    return defaultOutput();
   }
-  if (host === 'grok' && n.event === 'PreToolUse') {
-    const offered = await readJson(grokContextPath).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
-    if (!offered || !n.turnId || offered.turnId !== n.turnId) return null;
-    const claimed = `${grokContextPath}.${randomUUID()}.claimed`;
-    const won = await rename(grokContextPath, claimed).then(() => true).catch(error => {
-      if (error.code === 'ENOENT') return false;
-      throw error;
-    });
-    if (won) try {
-      const stored = await readJson(claimed);
-      if (n.turnId && stored.turnId === n.turnId) {
-        const output = port.formatContext(stored.text, n.event);
-        await recordStatus(stateDir, { host, event: n.event, mode: 'context', status: 'emitted' });
-        return output;
-      }
-      // A newer prompt may replace the cache between inspection and claim. Restore without
-      // overwriting an even newer cache. A late old tool must not consume another turn's recall.
-      await link(claimed, grokContextPath).catch(error => { if (error.code !== 'EEXIST') throw error; });
-      await recordStatus(stateDir, { host, event: n.event, mode: 'context', status: 'partial', code: 'turn_identity_missing_or_changed' });
-    } finally { await unlink(claimed); }
+  const contextBoundary = host === 'grok' && n.event === 'PreToolUse'
+    || host === 'cursor' && ['PostToolUse', 'PostToolUseFailure'].includes(n.event);
+  if (contextBoundary) {
+    const text = await takeContext(grokContextPath, n.turnId);
+    if (text) {
+      await recordStatus(stateDir, { host, event: n.event, mode: 'context', status: 'emitted' });
+      return port.formatContext(text, n.event);
+    }
   }
   if (context?.text) return port.formatContext(context.text, n.event);
-  if (n.event === 'SessionStart' || n.event === 'SubagentStart') return port.formatContext(START_TEXT, n.event);
-  return null;
+  if (n.event === 'SessionStart' || n.event === 'SubagentStart') return port.formatContext(START_TEXT, n.event) ?? defaultOutput();
+  return defaultOutput();
 }
