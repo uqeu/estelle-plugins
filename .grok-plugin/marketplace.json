@@ -1,0 +1,9 @@
+{
+  "name": "estelle-plugins",
+  "plugins": [
+    {
+      "name": "estelle",
+      "source": "./plugins/grok"
+    }
+  ]
+}
