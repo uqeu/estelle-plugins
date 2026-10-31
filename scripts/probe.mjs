@@ -48,7 +48,26 @@ assert.ok(Array.isArray(names) && names.length > 0, 'The server must return actu
 assert.ok(names.includes('estelle_resume') && names.includes('estelle_room'));
 const negative = await rpc(initialize, 'invalid-synthetic-probe-credential');
 assert.ok([401, 403].includes(negative.status), 'Invalid credential must be refused');
+
+// Write-path reachability. /session/events and /checkpoint have no dry-run contract, so a valid body
+// would persist synthetic memory into the account and is deliberately never sent. A structurally
+// invalid body must be refused with a client error: that proves authentication, routing and
+// validation are alive for the write doors without storing anything.
+async function refusedWrite(path) {
+  const response = await fetch(`${apiBase()}${path}`, { method: 'POST', redirect: 'error',
+    signal: AbortSignal.timeout(15_000),
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' }, body: '{}' });
+  await response.arrayBuffer().catch(() => {});
+  return response.status;
+}
+const writeProbe = {};
+for (const path of ['/session/events', '/checkpoint']) {
+  const status = await refusedWrite(path);
+  assert.ok(status >= 400 && status < 500, `${path} must refuse an invalid body with a client error, got ${status}`);
+  writeProbe[path] = status;
+}
 console.log(JSON.stringify({ endpoint, authenticatedInitialize: positive.status, toolCount: names.length,
   rooms: names.includes('estelle_room'), memory: names.includes('estelle_resume'),
   monitor: names.filter(name => name.startsWith('monitor_')).length,
+  writePathRefusedInvalid: writeProbe,
   invalidCredential: negative.status, protocolVersion: version }, null, 2));

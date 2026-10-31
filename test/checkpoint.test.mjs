@@ -132,3 +132,67 @@ test('leading and trailing blank records are not counted as messages or replayed
   assert.deepEqual(result.messages, [{ role: 'user', content: 'one' }]);
   assert.equal(result.client.lines, 1);
 });
+
+test('Cursor conversation lines checkpoint with inferred-dialect disclosure; control and tool lines are skipped', async t => {
+  const f = await fixture(t);
+  await writeFile(f.path, [
+    { role: 'user', message: { content: [{ type: 'text', text: 'hello' }] } },
+    { type: 'turn_ended', status: 'success' },
+    { role: 'assistant', message: { content: [{ type: 'text', text: 'world' }, { type: 'tool_use', name: 'Shell', input: { command: 'x' } }] } },
+    { role: 'tool', content: 'tool output is not conversation' },
+  ].map(line).join(''));
+  const result = await readTranscriptMessages({ path: f.path, host: 'cursor' });
+  assert.equal(result.messages.length, 2);
+  assert.match(result.messages[1].content, /world/);
+  assert.match(result.messages[1].content, /tool: Shell/);
+  assert.equal(result.client.transcript_format, 'cursor-jsonl-inferred');
+  assert.equal(result.client.format_verified, false);
+  assert.equal(result.client.transcript_partial, true);
+  assert.match(result.messages[0].content, /checkpoint is PARTIAL/);
+});
+
+test('Grok ACP chunks merge into one message per turn and chat-history lines read directly', async t => {
+  const f = await fixture(t);
+  await writeFile(f.path, [
+    { params: { update: { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'Fix ' } } } },
+    { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'the parser' } },
+    { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'reasoning is not conversation' } },
+    { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Done.' } },
+    { role: 'tool', content: 'tool output stays out' },
+  ].map(line).join(''));
+  const result = await readTranscriptMessages({ path: f.path, host: 'grok' });
+  assert.equal(result.messages.length, 2);
+  assert.match(result.messages[0].content, /Fix the parser/);
+  assert.equal(result.messages[1].content, 'Done.');
+  assert.equal(result.client.transcript_format, 'grok-jsonl-inferred');
+  assert.equal(result.client.format_verified, false);
+  await writeFile(f.path, line({ role: 'user', content: [{ type: 'text', text: 'history hello' }] })
+    + line({ role: 'assistant', content: 'history answer' }));
+  const history = await readTranscriptMessages({ path: f.path, host: 'grok' });
+  assert.match(history.messages[0].content, /history hello/);
+  assert.equal(history.messages[1].content, 'history answer');
+});
+
+test('Cursor checkpoint posts the redacted conversation once the refusal is removed', async t => {
+  const f = await fixture(t);
+  f.options.host = 'cursor';
+  await writeFile(f.path, line({ role: 'user', message: { content: [{ type: 'text', text: 'fix estelle_live_abcdefgh1234' }] } }));
+  const result = await checkpointSession(f.options);
+  assert.equal(result.saved, true);
+  assert.equal(f.calls[0].route, '/checkpoint');
+  assert.equal(f.calls[0].body.client.name, 'cursor');
+  assert.equal(f.calls[0].body.client.format_verified, false);
+  assert.ok(!JSON.stringify(f.calls[0].body).includes('estelle_live_abcdefgh1234'));
+});
+
+test('malformed and unrecognized lines in inferred dialects count as loss rather than aborting the checkpoint', async t => {
+  const f = await fixture(t);
+  f.options.host = 'grok';
+  await writeFile(f.path, '{broken json\n' + line({ totally: 'unknown' }) + line({ role: 'user', content: 'real question' }));
+  const result = await checkpointSession(f.options);
+  assert.equal(result.saved, true);
+  assert.equal(result.messages, 1);
+  assert.equal(result.client.invalid_lines, 1);
+  assert.equal(result.client.unknown_lines, 1);
+  assert.equal(result.client.transcript_partial, true);
+});

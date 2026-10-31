@@ -1,6 +1,6 @@
 ---
 name: estelle
-description: "Use Estelle for repository evidence, shared memory, Rooms, production monitoring and engineering requests from Claude Code, Codex, Kimi Code or Grok Build. Inspect the connected tool schemas before calling them."
+description: "Use Estelle for repository evidence, shared memory, Rooms, production monitoring and engineering requests from Claude Code, Codex, Kimi Code, Grok Build or Cursor. Inspect the connected tool schemas before calling them."
 ---
 
 # Estelle

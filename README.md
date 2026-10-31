@@ -64,8 +64,9 @@ Install Estelle for Cursor from https://github.com/uqeu/estelle-plugins. Follow 
 </details>
 
 Includes MCP connections, coding skills, recall hooks and local credential-pattern protection.
-Claude, Codex and Kimi also support bounded conversation capture. Grok and Cursor transcript
-capture is unavailable; neither should be described as a complete handoff.
+All five hosts support bounded conversation capture. The Grok and Cursor transcript dialects are
+inferred from the hook payload contract, not yet verified against a live host session, so their
+captures disclose `format_verified: false` and must not be described as a complete handoff.
 
 The hosted service determines which actions your account can use. Installing a command does not
 add a missing backend action. Rooms requires server support and this session's verified identity.
