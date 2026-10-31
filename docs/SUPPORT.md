@@ -7,9 +7,9 @@
 | Commands | Native | Plugin skills | Native | Native | Native |
 | Startup instructions | Hook context | Hook context | Startup skill | Skills/MCP | Rule and hook context |
 | Automatic recall | Prompt hook | Prompt hook | Prompt hook | Next matching pre-tool hook | Next matching post-tool hook |
-| Transcript capture | Bounded JSONL | Bounded rollout | Bounded main-agent journal | Unavailable | Unavailable |
-| Checkpoints | Bounded conversation | Bounded conversation | Active main-agent branch | Unavailable | Unavailable |
-| Exit save | Reference; retry later | Reference; retry later | Reference; retry later | No transcript reader | No transcript reader |
+| Transcript capture | Bounded JSONL | Bounded rollout | Bounded main-agent journal | Bounded JSONL (inferred dialect) | Bounded JSONL (inferred dialect) |
+| Checkpoints | Bounded conversation | Bounded conversation | Active main-agent branch | Bounded conversation (inferred dialect) | Bounded conversation (inferred dialect) |
+| Exit save | Reference; retry later | Reference; retry later | Reference; retry later | Reference; retry later | Reference; retry later |
 | Model-request observation | No | Native observers | No | No | No |
 
 Hooks require a usable `ESTELLE_API_KEY`; a separate MCP OAuth login does not establish hook
@@ -18,7 +18,10 @@ queued uploads and unsupported formats are not complete history.
 
 Grok and Cursor prompt hooks cannot inject context. Recall is queued for a matching supported
 tool boundary; a reply with no tool call may receive none. Cursor stop hooks never auto-continue
-the agent. Cursor transcripts are not interpreted as Claude or Codex files.
+the agent. Grok and Cursor transcript readers are inferred from the hook payload contract and
+third-party observations of the on-disk JSONL, not yet verified against a live host session: their
+checkpoints are marked partial, their event times are capture time (the transcript lines carry no
+verified timestamps), unrecognized lines are skipped, and Cursor does not record tool outputs.
 
 Rooms needs server-side host support, an authenticated owner and a session proof. Native hook
 identity and Cursor's `user_email` are not substitutes for that proof or permission to share.
