@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, readFile, rm, appendFile, readdir, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { streamSession, mapClaude, mapCodex, mapKimi, safeSession, LIMITS } from '../runtime/stream.mjs';
+import { streamSession, mapClaude, mapCodex, mapKimi, mapCursor, mapGrok, safeSession, LIMITS } from '../runtime/stream.mjs';
 
 const AT = '2026-10-30T12:00:00.000Z';
 const claude = (uuid, type, content) => ({ uuid, timestamp: AT, type, message: { content } });
@@ -204,5 +204,115 @@ test('a transcript entry exceeding block bound is refused explicitly before curs
   const f = await fixture(t);
   await writeFile(f.transcript, line(claude('a', 'assistant', Array.from({ length: LIMITS.messageBlocks + 1 }, () => ({ type: 'text', text: 'block' })))));
   await assert.rejects(streamSession(f.options), /message exceeds block bound; cursor retained/);
+  assert.equal(f.calls.length, 0);
+});
+
+test('Cursor dialect maps role and control lines and refuses records without any timestamp source', () => {
+  const notes = { observedAt: AT };
+  const user = mapCursor({ role: 'user', message: { content: [{ type: 'text', text: 'Fix the parser' }] } }, 0, notes);
+  assert.equal(user[0].kind, 'customer_message');
+  assert.equal(user[0].event_id, 'c0:0');
+  assert.equal(user[0].at, AT);
+  assert.equal(notes.title, 'Fix the parser');
+  const assistant = mapCursor({ role: 'assistant', message: { content: [
+    { type: 'text', text: 'On it.' },
+    { type: 'tool_use', id: 't1', name: 'Write', input: { path: 'a.ts', contents: 'one\ntwo' } },
+  ] } }, 10, notes);
+  assert.equal(assistant[1].kind, 'edit');
+  assert.equal(assistant[1].author.id, 'cursor');
+  assert.equal(assistant[1].payload.path, 'a.ts');
+  assert.equal(assistant[1].payload.diff, '+one\n+two');
+  const shell = mapCursor({ role: 'assistant', message: { content: [{ type: 'tool_use', name: 'Shell', input: { command: 'npm test' } }] } }, 20, notes);
+  assert.equal(shell[0].kind, 'tool_call');
+  assert.equal(shell[0].payload.summary, 'Ran npm test');
+  const ended = mapCursor({ type: 'turn_ended', status: 'success' }, 30, notes);
+  assert.equal(ended[0].kind, 'lifecycle');
+  assert.equal(ended[0].payload.reason, 'input_required');
+  assert.deepEqual(mapCursor({ type: 'turn_ended' }, 40), []);
+  assert.deepEqual(mapCursor({ role: 'system', message: { content: 'hidden' } }, 50, notes), []);
+  assert.deepEqual(mapCursor({ irrelevant: true }, 60, notes), []);
+  assert.deepEqual(mapCursor(null, 70, notes), []);
+});
+
+test('Grok dialect reads ACP update and chat-history lines, skipping unrecognized records', () => {
+  const notes = { observedAt: AT };
+  const chunk = mapGrok({ sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'Fix it' } }, 0, notes);
+  assert.equal(chunk[0].kind, 'customer_message');
+  assert.equal(chunk[0].event_id, 'g0');
+  assert.equal(notes.title, 'Fix it');
+  assert.deepEqual(mapGrok({ sessionUpdate: 'user_message_chunk', content: { type: 'text', text: '<system-reminder>fake' } }, 4, notes), []);
+  const enveloped = mapGrok({ jsonrpc: '2.0', method: 'session/update',
+    params: { update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Done.' } } } }, 8, notes);
+  assert.equal(enveloped[0].kind, 'agent_message');
+  assert.equal(enveloped[0].author.id, 'grok');
+  const thought = mapGrok({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'thinking aloud' } }, 16, notes);
+  assert.equal(thought[0].kind, 'thinking');
+  const call = mapGrok({ sessionUpdate: 'tool_call', toolCallId: 'call-1', title: 'Read', rawInput: { path: 'a.ts' } }, 24, notes);
+  assert.equal(call[0].kind, 'tool_call');
+  assert.equal(call[0].payload.call_id, 'call-1');
+  const done = mapGrok({ sessionUpdate: 'tool_call_update', toolCallId: 'call-1', status: 'completed',
+    content: [{ type: 'content', content: { type: 'text', text: 'file text' } }] }, 32, notes);
+  assert.equal(done[0].kind, 'tool_result');
+  assert.equal(done[0].payload.ok, true);
+  assert.equal(done[0].payload.output, 'file text');
+  const history = mapGrok({ role: 'assistant', content: 'Working',
+    tool_calls: [{ id: 'c1', type: 'function', function: { name: 'Read', arguments: '{"path":"a.ts"}' } }] }, 40, notes);
+  assert.equal(history[0].kind, 'agent_message');
+  assert.equal(history[1].kind, 'tool_call');
+  assert.deepEqual(history[1].payload.input, { path: 'a.ts' });
+  const toolResult = mapGrok({ role: 'tool', tool_call_id: 'c1', content: 'file text' }, 48, notes);
+  assert.equal(toolResult[0].kind, 'tool_result');
+  assert.equal(toolResult[0].payload.call_id, 'c1');
+  assert.deepEqual(mapGrok({ role: 'system', content: 'prompt' }, 56, notes), []);
+  assert.deepEqual(mapGrok({ sessionUpdate: 'plan', entries: [] }, 64, notes), []);
+  assert.deepEqual(mapGrok({ role: 'user', content: 'no time anywhere' }, 72), []);
+});
+
+test('Cursor stream sends conversation with capture-time stamps, survives malformed lines, and does not repeat', async t => {
+  const f = await fixture(t, 'cursor');
+  await writeFile(f.transcript, [
+    '{"role":"user","message":{"content":[{"type":"text","text":"hello cursor"}]}}',
+    '{malformed json',
+    '{"role":"assistant","message":{"content":[{"type":"text","text":"working"}]}}',
+    '{"type":"turn_ended","status":"success"}',
+  ].join('\n') + '\n');
+  const result = await streamSession(f.options);
+  assert.equal(result.session_id, 'cursor-fixture-session');
+  assert.equal(result.transcript_format, 'cursor-jsonl-inferred');
+  assert.equal(result.current_format_verified, false);
+  assert.equal(result.event_times, 'capture-time');
+  assert.equal(result.invalid_lines, 1);
+  const events = f.calls[0].body.events;
+  assert.ok(events.some(item => item.kind === 'customer_message' && item.payload.text === 'hello cursor'));
+  assert.ok(events.some(item => item.kind === 'agent_message'));
+  assert.ok(events.some(item => item.payload.reason === 'input_required'));
+  assert.ok(events.every(item => Number.isFinite(Date.parse(item.at))));
+  assert.equal((await streamSession(f.options)).sent, 0);
+});
+
+test('Grok stream reads the ACP update dialect over a stateful cursor', async t => {
+  const f = await fixture(t, 'grok');
+  await writeFile(f.transcript, [
+    JSON.stringify({ params: { update: { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'hello grok' } } } }),
+    '{malformed json',
+    JSON.stringify({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'working' } }),
+  ].join('\n') + '\n');
+  const result = await streamSession(f.options);
+  assert.equal(result.session_id, 'grok-fixture-session');
+  assert.equal(result.transcript_format, 'grok-jsonl-inferred');
+  assert.equal(result.invalid_lines, 1);
+  const events = f.calls.flatMap(call => call.body.events);
+  assert.ok(events.some(item => item.kind === 'customer_message' && item.payload.text === 'hello grok'));
+  assert.ok(events.some(item => item.kind === 'agent_message' && item.payload.text === 'working'));
+  assert.equal((await streamSession(f.options)).sent, 0);
+});
+
+test('an empty inferred-dialect transcript sends nothing and a missing file fails without sending', async t => {
+  const f = await fixture(t, 'grok');
+  const empty = await streamSession(f.options);
+  assert.equal(empty.sent, 0);
+  assert.equal(f.calls.length, 0);
+  f.options.payload.transcript_path = join(f.dir, 'missing.jsonl');
+  await assert.rejects(streamSession(f.options), /ENOENT/);
   assert.equal(f.calls.length, 0);
 });

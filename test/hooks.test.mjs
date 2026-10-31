@@ -266,3 +266,26 @@ test('round-robin replay lets a small session finish while an older large sessio
   assert.equal(spy.calls.filter(call => call.route === '/checkpoint').at(-1).body.session_id, 'small-fixture');
   assert.deepEqual(await readdir(join(f.stateDir, 'deferred')), [largeName]);
 });
+
+test('Grok tool hook streams its transcript dialect and SessionEnd drains into checkpoint and events', async t => {
+  const f = await fixture(t);
+  const path = join(f.directory, 'grok-transcript.jsonl');
+  await writeFile(path, JSON.stringify({ role: 'user', content: [{ type: 'text', text: 'Explain the parser' }] }) + '\n');
+  const spy = requestSpy();
+  await handleHook({ host: 'grok', stateDir: f.stateDir, request: spy.request,
+    payload: { hookEventName: 'post_tool_use', sessionId: 'grok-stream', cwd: f.root, transcriptPath: path,
+      promptId: 'grok-turn', toolName: 'Read', toolInput: { path: 'a.ts' }, toolUseId: 'grok-tool' } });
+  const streamed = spy.calls.find(call => call.route === '/session/events');
+  assert.ok(streamed, 'grok PostToolUse must stream its transcript');
+  assert.equal(streamed.body.session_id, 'grok-grok-stream');
+  assert.ok(streamed.body.events.some(event => event.kind === 'customer_message'));
+  const ended = await handleHook({ host: 'grok', stateDir: f.stateDir, request: async () => { throw new Error('must not run at exit'); },
+    payload: { hookEventName: 'session_end', sessionId: 'grok-stream', cwd: f.root, transcriptPath: path } });
+  assert.equal(ended, null);
+  await drainOne(f.stateDir, spy.request);
+  const saved = spy.calls.find(call => call.route === '/checkpoint');
+  assert.equal(saved.body.session_id, 'grok-stream');
+  assert.equal(saved.body.client.name, 'grok');
+  assert.equal(saved.body.client.format_verified, false);
+  assert.match(saved.body.messages[0].content, /Explain the parser/);
+});
