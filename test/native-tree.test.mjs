@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm, chmod, symlink, rename } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { realpathSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { renameSync } from 'node:fs';
+import childProcess, { execFileSync } from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
 import { prepareContinuation } from '../runtime/native-export.mjs';
 import { indexSpelling } from '../runtime/native-index.mjs';
 import { captureTree, prepareTreeContinuation, continueTreeCloud } from '../runtime/native-tree.mjs';
@@ -23,11 +24,27 @@ async function fixture(t) {
   return { cwd, git, root };
 }
 const bytes = blob => blob === null ? null : Buffer.from(blob.base64, 'base64');
+const posixModes = { skip: process.platform === 'win32' && 'POSIX filesystem executable bits are unavailable on Windows' };
 
-test('selected tree preserves partial staging, deletions, binary files and executable modes', async t => {
+// Observe real Git after each command without relying on executable shebang shims.
+async function observeGit(afterGit, action) {
+  const original = childProcess.execFileSync;
+  childProcess.execFileSync = (file, args, ...options) => {
+    const output = original(file, args, ...options);
+    if (file === 'git') afterGit(args, original);
+    return output;
+  };
+  syncBuiltinESMExports();
+  try { await action(); }
+  finally { childProcess.execFileSync = original; syncBuiltinESMExports(); }
+  assert.equal(childProcess.execFileSync, original);
+  assert.equal(execFileSync, original);
+}
+
+test('selected tree preserves partial staging, deletions and binary files on every OS', async t => {
   const f = await fixture(t);
   await writeFile(join(f.cwd, 'app.py'), 'staged\n'); f.git(['add', 'app.py']);
-  await writeFile(join(f.cwd, 'app.py'), 'unstaged\n'); await chmod(join(f.cwd, 'app.py'), 0o755);
+  await writeFile(join(f.cwd, 'app.py'), 'unstaged\n');
   await rm(join(f.cwd, 'delete.py'));
   await writeFile(join(f.cwd, 'new image.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 255]));
   await assert.rejects(captureTree(f), /untracked_selection_required/);
@@ -35,9 +52,30 @@ test('selected tree preserves partial staging, deletions, binary files and execu
   const by = Object.fromEntries(out.tree.map(row => [row.path, row]));
   assert.deepEqual(bytes(by['app.py'].index), Buffer.from('staged\n'));
   assert.deepEqual(bytes(by['app.py'].worktree), Buffer.from('unstaged\n'));
-  assert.equal(by['app.py'].worktree.mode, '100755'); assert.equal(by['app.py'].index.mode, '100644');
+  assert.equal(by['app.py'].index.mode, '100644');
   assert.equal(by['delete.py'].worktree, null); assert.deepEqual(bytes(by['delete.py'].index), Buffer.from('base\n'));
   assert.equal(by['new image.png'].index, null); assert.deepEqual(bytes(by['new image.png'].worktree), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 255]));
+});
+
+test('POSIX worktree executable mode remains distinct from the staged mode', posixModes, async t => {
+  const f = await fixture(t);
+  await chmod(join(f.cwd, 'app.py'), 0o755);
+  const out = await captureTree(f);
+  assert.equal(out.tree[0].index.mode, '100644');
+  assert.equal(out.tree[0].worktree.mode, '100755');
+});
+
+test('staged executable mode and its removal round-trip through the Git index on every OS', async t => {
+  const f = await fixture(t);
+  f.git(['update-index', '--chmod=+x', 'app.py']);
+  let out = await captureTree(f);
+  assert.equal(out.tree.length, 1); assert.equal(out.tree[0].index.mode, '100755');
+  assert.deepEqual(bytes(out.tree[0].index), Buffer.from('base\n'));
+  f.git(['update-index', '--chmod=-x', 'app.py']);
+  await writeFile(join(f.cwd, 'app.py'), 'worktree\n');
+  out = await captureTree(f);
+  assert.equal(out.tree[0].index.mode, '100644');
+  assert.deepEqual(bytes(out.tree[0].worktree), Buffer.from('worktree\n'));
 });
 
 test('staged work is captured even when worktree was restored to HEAD bytes', async t => {
@@ -50,16 +88,26 @@ test('staged work is captured even when worktree was restored to HEAD bytes', as
   assert.deepEqual(bytes(out.tree[0].worktree), Buffer.from('base\n'));
 });
 
-test('staged deletion and executable-to-nonexecutable transitions remain distinct', async t => {
+test('staged deletion preserves null index and worktree entries on every OS', async t => {
   const f = await fixture(t);
-  await chmod(join(f.cwd, 'app.py'), 0o755); f.git(['add', 'app.py']); f.git(['commit', '-m', 'executable']);
-  await chmod(join(f.cwd, 'app.py'), 0o644); f.git(['rm', 'delete.py']);
-  const out = await captureTree(f), by = Object.fromEntries(out.tree.map(row => [row.path, row]));
-  assert.equal(by['app.py'].index.mode, '100755'); assert.equal(by['app.py'].worktree.mode, '100644');
-  assert.equal(by['delete.py'].index, null); assert.equal(by['delete.py'].worktree, null);
+  f.git(['rm', 'delete.py']);
+  const out = await captureTree(f);
+  assert.equal(out.tree.length, 1); assert.equal(out.tree[0].path, 'delete.py');
+  assert.equal(out.tree[0].index, null); assert.equal(out.tree[0].worktree, null);
 });
 
-test('literal wildcard and leading-space filenames do not select their siblings', async t => {
+test('POSIX executable-to-nonexecutable transition preserves distinct modes', posixModes, async t => {
+  const f = await fixture(t);
+  await chmod(join(f.cwd, 'app.py'), 0o755); f.git(['add', 'app.py']); f.git(['commit', '-m', 'executable']);
+  await chmod(join(f.cwd, 'app.py'), 0o644);
+  const out = await captureTree(f);
+  assert.equal(out.tree.length, 1); assert.equal(out.tree[0].path, 'app.py');
+  assert.equal(out.tree[0].index.mode, '100755'); assert.equal(out.tree[0].worktree.mode, '100644');
+});
+
+test('POSIX literal-star and leading-space filenames do not select their siblings', {
+  skip: process.platform === 'win32' && 'Windows filenames cannot contain a literal star',
+}, async t => {
   const f = await fixture(t);
   for (const name of ['wild*.py', 'wild-other.py', ' app.py']) await writeFile(join(f.cwd, name), 'base\n');
   f.git(['add', '.']); f.git(['commit', '-m', 'names']);
@@ -67,6 +115,18 @@ test('literal wildcard and leading-space filenames do not select their siblings'
   const out = await captureTree(f);
   assert.deepEqual(out.tree.map(row => row.path), [' app.py', 'wild*.py']);
   assert.deepEqual(bytes(out.tree[0].worktree), Buffer.from('space\n'));
+});
+
+test('literal bracket and leading-space filenames do not select their siblings on every OS', async t => {
+  const f = await fixture(t);
+  for (const name of ['wild[1].py', 'wild1.py', ' app.py', 'app-other.py']) await writeFile(join(f.cwd, name), 'base\n');
+  f.git(['add', '.']); f.git(['commit', '-m', 'portable names']);
+  await writeFile(join(f.cwd, 'wild[1].py'), 'bracket\n'); await writeFile(join(f.cwd, ' app.py'), 'space\n');
+  const out = await captureTree(f);
+  assert.deepEqual(out.tree.map(row => row.path), [' app.py', 'wild[1].py']);
+  assert.deepEqual(bytes(out.tree[0].worktree), Buffer.from('space\n'));
+  assert.deepEqual(bytes(out.tree[1].worktree), Buffer.from('bracket\n'));
+  assert.deepEqual(bytes(out.tree[1].index), Buffer.from('base\n'));
 });
 
 test('reserved credential filenames, parent symlinks and oversized objects are refused', async t => {
@@ -170,7 +230,7 @@ test('actual sparse index skip-directory state refuses', async t => {
   await assert.rejects(captureTree(f), /index_state_unsupported/);
 });
 
-test('mode observation does not trust hiding config or alter that config', async t => {
+test('POSIX mode observation does not trust hiding config or alter that config', posixModes, async t => {
   const f = await fixture(t);
   f.git(['config', 'core.fileMode', 'false']);
   f.git(['config', 'core.fsmonitor', '/must-not-execute']); f.git(['config', 'core.untrackedCache', 'true']);
@@ -182,16 +242,19 @@ test('mode observation does not trust hiding config or alter that config', async
 });
 
 test('index flags changing after initial preflight refuse before returning snapshot', async t => {
-  const f = await fixture(t), shim = join(f.root, 'bin'); await mkdir(shim);
-  const actualGit = realpathSync(execFileSync('which', ['git'], { encoding: 'utf8' }).trim());
-  const counter = join(f.root, 'preflight-count');
-  const source = `#!${process.execPath}\nimport { execFileSync } from 'node:child_process';\nimport { existsSync, readFileSync, writeFileSync } from 'node:fs';\nconst args = process.argv.slice(2);\nconst output = execFileSync(${JSON.stringify(actualGit)}, args);\nif (args.includes('--debug')) {\n const file = ${JSON.stringify(counter)}; const n = existsSync(file) ? Number(readFileSync(file, 'utf8')) + 1 : 1;\n writeFileSync(file, String(n));\n if (n === 1) execFileSync(${JSON.stringify(actualGit)}, ['-C', ${JSON.stringify(f.cwd)}, 'update-index', '--assume-unchanged', 'app.py']);\n}\nprocess.stdout.write(output);\n`;
-  await writeFile(join(shim, 'git'), source); await chmod(join(shim, 'git'), 0o755);
-  const oldPath = process.env.PATH; process.env.PATH = shim + ':' + oldPath;
-  try { await assert.rejects(captureTree(f), /index_state_unsupported/); }
-  finally { process.env.PATH = oldPath; }
+  const f = await fixture(t);
+  let observations = 0, injected = false;
+  await observeGit((args, realGit) => {
+    if (!args.includes('--debug')) return;
+    observations++;
+    if (observations === 1) {
+      realGit('git', ['-C', f.cwd, 'update-index', '--assume-unchanged', 'app.py']);
+      injected = true;
+    }
+  }, () => assert.rejects(captureTree(f), /index_state_unsupported/));
   // A second flag observation catches the change even though diff sees no dirt.
-  assert.equal(Number(await (await import('node:fs/promises')).readFile(counter, 'utf8')), 2);
+  assert.equal(injected, true); assert.equal(observations, 2);
+  assert.match(f.git(['ls-files', '-v', '--', 'app.py']), /^h /);
 });
 
 
@@ -224,17 +287,17 @@ test('indexed metadata inventory bound refuses before opening any repository dir
 });
 
 test('case-only rename during blob capture refuses the snapshot on either filesystem type', async t => {
-  const f = await fixture(t), shim = join(f.root, 'bin'); await mkdir(shim);
+  const f = await fixture(t);
   await writeFile(join(f.cwd, '.gitignore'), 'APP.py\n'); f.git(['add', '.gitignore']); f.git(['commit', '-m', 'ignore alternate']);
   await writeFile(join(f.cwd, 'delete.py'), 'visible edit\n');
-  const actualGit = realpathSync(execFileSync('which', ['git'], { encoding: 'utf8' }).trim());
-  const counter = join(f.root, 'blob-count');
-  const source = `#!${process.execPath}\nimport { execFileSync } from 'node:child_process';\nimport { existsSync, renameSync, writeFileSync } from 'node:fs';\nconst args = process.argv.slice(2);\nconst output = execFileSync(${JSON.stringify(actualGit)}, args);\nif (args.includes('cat-file') && args.includes('blob') && !existsSync(${JSON.stringify(counter)})) {\n writeFileSync(${JSON.stringify(counter)}, '1');\n renameSync(${JSON.stringify(join(f.cwd, 'app.py'))}, ${JSON.stringify(join(f.cwd, 'APP.py'))});\n}\nprocess.stdout.write(output);\n`;
-  await writeFile(join(shim, 'git'), source); await chmod(join(shim, 'git'), 0o755);
-  const oldPath = process.env.PATH; process.env.PATH = shim + ':' + oldPath;
+  let injections = 0;
   // Case-sensitive Git can detect the changed tree before the final spelling check. Either
   // named refusal preserves the contract; accepting a snapshot after this rename does not.
-  try { await assert.rejects(captureTree(f), /^Error: native_(?:index_state_unsupported|artifact_changed)$/); }
-  finally { process.env.PATH = oldPath; }
-  assert.equal(await (await import('node:fs/promises')).readFile(counter, 'utf8'), '1');
+  await observeGit(args => {
+    if (args.includes('cat-file') && args.includes('blob') && injections === 0) {
+      renameSync(join(f.cwd, 'app.py'), join(f.cwd, 'APP.py'));
+      injections++;
+    }
+  }, () => assert.rejects(captureTree(f), /^Error: native_(?:index_state_unsupported|artifact_changed)$/));
+  assert.equal(injections, 1);
 });

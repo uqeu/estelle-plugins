@@ -108,7 +108,9 @@ test('encrypted native thinking is refused before any upload', async t => {
   await assert.rejects(prepareContinuation(f), /private_reasoning_unsupported/);
 });
 
-test('space-only staged and untracked names cannot bypass unsupported-state refusal', async t => {
+test('POSIX space-only staged and untracked names cannot bypass unsupported-state refusal', {
+  skip: process.platform === 'win32' && 'Windows cannot represent a space-only filename',
+}, async t => {
   const f = await fixture(t);
   await writeFile(join(f.cwd, '   '), 'fixture');
   await assert.rejects(prepareContinuation(f), /untracked_changes/);
