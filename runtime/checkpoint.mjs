@@ -2,7 +2,7 @@
 import { open } from 'node:fs/promises';
 import { redact, sanitize } from './redact.mjs';
 import { cloudExecutionIdentity } from './identity.mjs';
-import { safeSession } from './stream.mjs';
+import { safeSession, grokContentText } from './stream.mjs';
 import { readKimiHistory } from './kimi-history.mjs';
 
 export const CHECKPOINT_LIMITS = Object.freeze({
@@ -80,12 +80,6 @@ function messageOf(record, host, subagent) {
   return record.type === 'context.append_message' && ['user', 'assistant'].includes(record.message?.role) ? record.message : null;
 }
 
-function grokContentText(content) {
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) return content.map(block => (typeof block?.text === 'string' ? block.text : '')).filter(Boolean).join('\n');
-  return typeof content?.text === 'string' ? content.text : '';
-}
-
 function contextOf(record, host, context) {
   const meta = host === 'codex' && record.type === 'session_meta' ? record.payload : record;
   for (const [key, value] of Object.entries({ cwd: meta?.cwd, branch: meta?.gitBranch ?? meta?.git?.branch,
@@ -98,9 +92,10 @@ function checkpointText(message, counters) {
   const blocks = message.content;
   if (Array.isArray(blocks) && blocks.length > CHECKPOINT_LIMITS.blocks) counters.blocks_truncated++;
   const text = (typeof blocks === 'string' ? blocks : Array.isArray(blocks)
-    ? blocks.slice(0, CHECKPOINT_LIMITS.blocks).map(blockText).filter(Boolean).join('\n') : '').trim();
-  if (!text || (message.role === 'user' && INJECTED.some(prefix => text.startsWith(prefix)))) return null;
-  const clean = redact(text);
+    ? blocks.slice(0, CHECKPOINT_LIMITS.blocks).map(blockText).filter(Boolean).join('\n') : '');
+  // ACP chunk fragments split mid-word; trimming each fragment would corrupt the merged turn.
+  if (!text.trim() || (message.role === 'user' && INJECTED.some(prefix => text.trim().startsWith(prefix)))) return null;
+  const clean = redact(message.chunk ? text : text.trim());
   if (Array.from(clean).length > CHECKPOINT_LIMITS.chars) counters.messages_truncated++;
   return { role: message.role, content: shortened(clean), ...(message.chunk ? { chunk: true } : {}) };
 }

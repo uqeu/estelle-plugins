@@ -220,11 +220,12 @@ export function mapCursor(record, offset, notes = {}) {
   return messageEvents(blocks, record.role, id, at, 'cursor', notes);
 }
 
-/** ACP content is a single block; chat-history content may be a string or a block array. */
-function grokText(content) {
+/** ACP content is a single block; chat-history content may be a string or a block array. Depth is bounded. */
+export function grokContentText(content, depth = 0) {
   if (typeof content === 'string') return content;
-  if (Array.isArray(content)) return content.map(block => string(block?.text)).filter(Boolean).join('\n');
-  return string(content?.text);
+  if (depth >= 8 || !content || typeof content !== 'object') return '';
+  if (Array.isArray(content)) return content.map(block => grokContentText(block, depth + 1)).filter(Boolean).join('\n');
+  return string(content.text) || grokContentText(content.content, depth + 1);
 }
 
 /**
@@ -244,14 +245,14 @@ export function mapGrok(record, offset, notes = {}) {
   if (update && typeof update === 'object') {
     const kind = string(update.sessionUpdate);
     if (kind === 'user_message_chunk' || kind === 'agent_message_chunk') {
-      const text = grokText(update.content);
+      const text = grokContentText(update.content);
       if (!text.trim() || (kind === 'user_message_chunk' && injected(text, INJECTED))) return [];
       if (kind === 'user_message_chunk') notes.title ??= text.trim().split('\n')[0].slice(0, 90);
       return [event(id, kind === 'user_message_chunk' ? 'customer_message' : 'agent_message',
         kind === 'user_message_chunk' ? { kind: 'customer' } : agent('grok'), at, { text: cap(text) })];
     }
     if (kind === 'agent_thought_chunk') {
-      const text = grokText(update.content);
+      const text = grokContentText(update.content);
       return text.trim() ? [event(id, 'thinking', agent('grok'), at, { text: cap(text) })] : [];
     }
     if (kind === 'tool_call') {
@@ -263,13 +264,13 @@ export function mapGrok(record, offset, notes = {}) {
     if (kind === 'tool_call_update') {
       const status = string(update.status);
       return [event(id, 'tool_result', agent('grok'), at, { call_id: string(update.toolCallId) || null,
-        ok: status === 'completed' ? true : status === 'failed' ? false : null, output: cap(grokText(update.content)) })];
+        ok: status === 'completed' ? true : status === 'failed' ? false : null, output: cap(grokContentText(update.content)) })];
     }
     return [];
   }
   if (record.role === 'tool') {
     return [event(id, 'tool_result', agent('grok'), at,
-      { call_id: string(record.tool_call_id) || null, ok: null, output: cap(grokText(record.content)) })];
+      { call_id: string(record.tool_call_id) || null, ok: null, output: cap(grokContentText(record.content)) })];
   }
   if (!['user', 'assistant'].includes(record.role)) return [];
   const content = record.content;

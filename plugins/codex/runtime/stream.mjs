@@ -15,7 +15,8 @@ export const LIMITS = Object.freeze({
 });
 const INJECTED = ['<system-reminder', '<command-', '<local-command', '<task-notification', '[SYSTEM NOTIFICATION', 'Caveat:'];
 const CODEX_INJECTED = [...INJECTED, '<environment_context', '<user_instructions', '# AGENTS.md instructions', '<skill', '<turn_aborted', '<user_shell_command'];
-const AGENTS = { claude: 'claude-code', 'claude-code': 'claude-code', codex: 'codex', kimi: 'kimi-code', 'kimi-code': 'kimi-code' };
+const AGENTS = { claude: 'claude-code', 'claude-code': 'claude-code', codex: 'codex', kimi: 'kimi-code', 'kimi-code': 'kimi-code',
+  grok: 'grok', cursor: 'cursor' };
 const WAITING = 'waiting_for_review/input_required';
 const string = value => typeof value === 'string' ? value : '';
 const validTime = value => typeof value === 'string' && Number.isFinite(Date.parse(value));
@@ -44,7 +45,7 @@ function messageEvents(blocks, role, id, at, harness, notes, sidechain = false, 
     } else if (block.type === 'tool_result') {
       out.push(event(key, 'tool_result', agent(harness), at, { call_id: block.tool_use_id ?? null, ok: block.is_error !== true, output: cap(textOf(block.content)) }));
     } else if (role === 'assistant' && block.type === 'tool_use') {
-      out.push(claudeTool(block, key, at, sidechain, child));
+      out.push(harness === 'cursor' ? cursorTool(block, key, at, sidechain, child) : claudeTool(block, key, at, sidechain, child));
     } else if (role === 'assistant' && block.type === 'thinking' && string(block.thinking).trim()) {
       out.push(event(key, 'thinking', agent(harness), at, { text: cap(block.thinking) }));
     }
@@ -70,6 +71,22 @@ function claudeTool(block, id, at, sidechain, child) {
   const summary = name === 'Bash' ? `Ran ${string(input.description) || string(input.command).slice(0, 80)}` : name === 'Read' ? `Read ${string(input.file_path)}` : name;
   return event(id, 'tool_call', { kind: /mcp__estelle__/i.test(name) ? 'estelle' : 'agent', id: who }, at,
     { call_id: block.id ?? null, tool: name, summary: cap(summary), input: sanitize({ ...input, ...(input.file_path ? { path: input.file_path } : {}) }) });
+}
+
+/** Cursor tool_use blocks follow the Anthropic shape but with Cursor's names: `path` not `file_path`, `contents` on Write. */
+function cursorTool(block, id, at, sidechain, child) {
+  const name = string(block.name) || 'tool';
+  const input = block.input ?? {};
+  const who = sidechain || child ? 'subagent' : 'cursor';
+  const path = string(input.path) || string(input.file_path);
+  if (['Write', 'StrReplace', 'Edit'].includes(name)) {
+    const diff = name === 'Write' ? string(input.contents ?? input.content).split('\n').map(line => `+${line}`).join('\n')
+      : [...string(input.old_string).split('\n').map(line => `-${line}`), ...string(input.new_string).split('\n').map(line => `+${line}`)].join('\n');
+    return event(id, 'edit', agent(who), at, { path, diff: cap(diff), call_id: block.id ?? null });
+  }
+  const summary = name === 'Shell' ? `Ran ${string(input.description) || string(input.command).slice(0, 80)}` : name === 'Read' ? `Read ${path}` : name;
+  return event(id, 'tool_call', { kind: /estelle/i.test(name) ? 'estelle' : 'agent', id: who }, at,
+    { call_id: block.id ?? null, tool: name, summary: cap(summary), input: sanitize({ ...input, ...(path ? { path } : {}) }) });
 }
 
 /** Claude JSONL UUIDs and Codex rollout byte offsets remain the server's replay identity. */
@@ -170,6 +187,104 @@ export function mapKimi(record, offset, notes = {}) {
     try { input = JSON.parse(string(call.arguments ?? call.function?.arguments)); } catch { input = { arguments: string(call.arguments) }; }
     out.push(event(`${id}:tool-${index}`, 'tool_call', { kind: /estelle/i.test(name) ? 'estelle' : 'agent', id: 'kimi-code' }, at,
       { call_id: call.id ?? null, tool: name || 'tool', summary: cap(`Ran ${name || 'tool'}`), input: sanitize(input) }));
+  }
+  return out;
+}
+
+/** Capture time for dialects whose transcript lines carry no verified per-record timestamp. */
+function observedAt(record, notes) {
+  if (validTime(record?.timestamp)) return record.timestamp;
+  const at = string(notes.observedAt);
+  return validTime(at) ? at : null;
+}
+
+/**
+ * Cursor agent-transcripts JSONL: `{"role":"user"|"assistant","message":{"content":[...]}}` lines with
+ * Anthropic-shaped text/tool_use blocks (Cursor tool names: Shell, Write carries `contents`, `path` not
+ * `file_path`), plus role-less control lines such as `{"type":"turn_ended","status":"success"}`.
+ * Tool outputs are not recorded by the host. Confidence: inferred from third-party observations of
+ * ~/.cursor/projects/<slug>/agent-transcripts/ (checked 2026-09/10), not verified against a live session.
+ * Lines carry no timestamp, so events are stamped with capture time (notes.observedAt).
+ */
+export function mapCursor(record, offset, notes = {}) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return [];
+  const at = observedAt(record, notes);
+  if (!at) return [];
+  const id = `c${offset}`;
+  if (!['user', 'assistant'].includes(record.role)) {
+    return record.role === undefined && record.type === 'turn_ended'
+      ? [lifecycle(`${id}:turn-end`, at, 'waiting_for_review', 'input_required')] : [];
+  }
+  const content = record.message?.content ?? record.content;
+  const blocks = typeof content === 'string' ? [{ type: 'text', text: content }] : Array.isArray(content) ? content : [];
+  return messageEvents(blocks, record.role, id, at, 'cursor', notes);
+}
+
+/** ACP content is a single block; chat-history content may be a string or a block array. Depth is bounded. */
+export function grokContentText(content, depth = 0) {
+  if (typeof content === 'string') return content;
+  if (depth >= 8 || !content || typeof content !== 'object') return '';
+  if (Array.isArray(content)) return content.map(block => grokContentText(block, depth + 1)).filter(Boolean).join('\n');
+  return string(content.text) || grokContentText(content.content, depth + 1);
+}
+
+/**
+ * Grok Build hook `transcriptPath` JSONL. Confidence: INFERRED, not verified against a live Grok session.
+ * Grok persists sessions as an ACP session-update stream (updates.jsonl) and as raw model messages
+ * (chat_history.jsonl); which one transcriptPath names is unverified, so both recognized families are read
+ * and everything else is skipped. ACP updates may arrive bare, under `update`, or as a session/update
+ * notification (`params.update`). Message chunks are incremental: each chunk becomes one event.
+ * Lines carry no verified timestamp, so events are stamped with capture time (notes.observedAt).
+ */
+export function mapGrok(record, offset, notes = {}) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return [];
+  const at = observedAt(record, notes);
+  if (!at) return [];
+  const id = `g${offset}`;
+  const update = record.params?.update ?? record.update ?? (typeof record.sessionUpdate === 'string' ? record : null);
+  if (update && typeof update === 'object') {
+    const kind = string(update.sessionUpdate);
+    if (kind === 'user_message_chunk' || kind === 'agent_message_chunk') {
+      const text = grokContentText(update.content);
+      if (!text.trim() || (kind === 'user_message_chunk' && injected(text, INJECTED))) return [];
+      if (kind === 'user_message_chunk') notes.title ??= text.trim().split('\n')[0].slice(0, 90);
+      return [event(id, kind === 'user_message_chunk' ? 'customer_message' : 'agent_message',
+        kind === 'user_message_chunk' ? { kind: 'customer' } : agent('grok'), at, { text: cap(text) })];
+    }
+    if (kind === 'agent_thought_chunk') {
+      const text = grokContentText(update.content);
+      return text.trim() ? [event(id, 'thinking', agent('grok'), at, { text: cap(text) })] : [];
+    }
+    if (kind === 'tool_call') {
+      const name = string(update.title) || 'tool';
+      const input = update.rawInput && typeof update.rawInput === 'object' ? update.rawInput : {};
+      return [event(id, 'tool_call', { kind: /estelle/i.test(name) ? 'estelle' : 'agent', id: 'grok' }, at,
+        { call_id: string(update.toolCallId) || null, tool: name, summary: cap(name), input: sanitize(input) })];
+    }
+    if (kind === 'tool_call_update') {
+      const status = string(update.status);
+      return [event(id, 'tool_result', agent('grok'), at, { call_id: string(update.toolCallId) || null,
+        ok: status === 'completed' ? true : status === 'failed' ? false : null, output: cap(grokContentText(update.content)) })];
+    }
+    return [];
+  }
+  if (record.role === 'tool') {
+    return [event(id, 'tool_result', agent('grok'), at,
+      { call_id: string(record.tool_call_id) || null, ok: null, output: cap(grokContentText(record.content)) })];
+  }
+  if (!['user', 'assistant'].includes(record.role)) return [];
+  const content = record.content;
+  const blocks = typeof content === 'string' ? [{ type: 'text', text: content }] : Array.isArray(content) ? content : [];
+  const out = messageEvents(blocks, record.role, id, at, 'grok', notes);
+  const calls = Array.isArray(record.tool_calls) ? record.tool_calls : [];
+  if (calls.length > LIMITS.messageBlocks) throw new Error('Grok tool-call record exceeds block bound; cursor retained');
+  for (const [index, call] of calls.entries()) {
+    if (!call || typeof call !== 'object') continue;
+    const name = string(call.name) || string(call.function?.name);
+    let input;
+    try { input = JSON.parse(string(call.arguments ?? call.function?.arguments)); } catch { input = { arguments: string(call.arguments ?? call.function?.arguments) }; }
+    out.push(event(`${id}:tool-${index}`, 'tool_call', { kind: /estelle/i.test(name) ? 'estelle' : 'agent', id: 'grok' }, at,
+      { call_id: string(call.id) || null, tool: name || 'tool', summary: cap(`Ran ${name || 'tool'}`), input: sanitize(input) }));
   }
   return out;
 }
@@ -294,7 +409,8 @@ function collectWindow(window, host, notes, remaining, child = false) {
   let used = 0;
   let invalid = 0;
   let lines = 0;
-  const mapper = host === 'codex' ? mapCodex : host === 'kimi-code' ? mapKimi : mapClaude;
+  const mapper = host === 'codex' ? mapCodex : host === 'kimi-code' ? mapKimi
+    : host === 'grok' ? mapGrok : host === 'cursor' ? mapCursor : mapClaude;
   const buffer = window.buffer;
   for (let from = 0; from < buffer.length && lines < LIMITS.lines; lines++) {
     const end = buffer.indexOf(10, from) + 1;
@@ -357,6 +473,8 @@ export async function streamSession({ payload, host, repo, stateDir, request }) 
   if (!Number.isSafeInteger(state.offset) || state.offset < 0) throw new Error('invalid transcript cursor');
   const timeline = timelineIdentity(host, session);
   const notes = {};
+  // Grok and Cursor transcript lines carry no verified timestamps; capture time stamps their events.
+  if (harness === 'grok' || harness === 'cursor') notes.observedAt = new Date().toISOString();
   let events = [];
   let offset = state.offset;
   let invalid = 0;
@@ -410,5 +528,9 @@ export async function streamSession({ payload, host, repo, stateDir, request }) 
   await saveJson(statePath, { offset, started, last_at: events.at(-1)?.at ?? last, last_lifecycle: collapsed.last, invalid_lines: invalid, skipped_lines: skipped, last_error: null });
   return { sent, dropped, replayed, backlog: incomplete, incomplete: incomplete || harness === 'kimi-code', invalid_lines: invalid, skipped_lines: skipped, offset, session_id: timeline,
     ...(harness === 'kimi-code' ? { transcript_format: 'kimi-wire', current_format_verified: true,
-      capture_scope: 'main-agent journal; stream includes recorded branch history' } : {}) };
+      capture_scope: 'main-agent journal; stream includes recorded branch history' } : {}),
+    ...(harness === 'grok' ? { transcript_format: 'grok-jsonl-inferred', current_format_verified: false,
+      event_times: 'capture-time', capture_scope: 'hook transcriptPath JSONL; ACP update and chat-history lines recognized, other lines skipped' } : {}),
+    ...(harness === 'cursor' ? { transcript_format: 'cursor-jsonl-inferred', current_format_verified: false,
+      event_times: 'capture-time', capture_scope: 'hook transcript_path JSONL; tool outputs are not recorded by the host' } : {}) };
 }
