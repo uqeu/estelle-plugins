@@ -51,7 +51,7 @@ test('Codex fixture uses rollout offsets, skips duplicate event messages and enc
   assert.equal(result[0].payload.call_id, 'x');
 });
 
-test('successful stream ACK advances private durable cursor; second run sends no duplicates', async t => {
+test('successful stream ACK advances durable cursor on every OS; second run sends no duplicates', async t => {
   const f = await fixture(t);
   await writeFile(f.transcript, line(claude('u', 'user', 'hello')) + line(claude('a', 'assistant', 'done')));
   const result = await streamSession(f.options);
@@ -60,8 +60,17 @@ test('successful stream ACK advances private durable cursor; second run sends no
   assert.equal(f.calls[0].path, '/session/events');
   assert.equal(f.calls[0].body.events[0].payload.repo, 'fixture/repository');
   assert.equal(JSON.parse(await readFile(f.state, 'utf8')).offset, (await stat(f.transcript)).size);
-  assert.equal((await stat(f.state)).mode & 0o777, 0o600);
   assert.equal((await streamSession(f.options)).sent, 0);
+});
+
+test('POSIX durable stream cursor is readable and writable only by its owner', {
+  skip: process.platform === 'win32' && 'POSIX mode bits do not measure Windows ACL protection; Windows ACLs remain unverified',
+}, async t => {
+  const f = await fixture(t);
+  await writeFile(f.transcript, line(claude('u', 'user', 'hello')));
+  const result = await streamSession(f.options);
+  assert.equal(result.sent, 3);
+  assert.equal((await stat(f.state)).mode & 0o777, 0o600);
 });
 
 test('failed upload retains cursor and spools redacted batch; another session drains it', async t => {

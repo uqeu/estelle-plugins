@@ -5,13 +5,22 @@ import { handleHook } from '../runtime/hooks.mjs';
 import { timelineIdentity } from '../runtime/identity.mjs';
 import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve, win32 } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
-const root = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
+const root = resolve(import.meta.dirname, '..');
 const fixture = event => ({ hook_event_name: event, conversation_id: 'conv-123', generation_id: 'turn-1',
   workspace_roots: [root], transcript_path: '/not-a-verified-cursor-transcript', model: 'claude',
   user_email: 'untrusted@example.test' });
+
+test('workspace fixture resolves native paths rather than treating file URL pathnames as drive paths', () => {
+  assert.equal(root, resolve(fileURLToPath(new URL('..', import.meta.url))));
+  const windowsUrl = new URL('file:///D:/a/estelle-plugins/estelle-plugins');
+  const native = fileURLToPath(windowsUrl, { windows: true });
+  assert.equal(native, 'D:\\a\\estelle-plugins\\estelle-plugins');
+  assert.notEqual(win32.normalize(windowsUrl.pathname), native);
+});
 
 test('Cursor uses native stable identity, matching start/end aliases and explicit workspace selection', () => {
   const normalized = normalize({ ...fixture('sessionStart'), session_id: 'conv-123' });
@@ -24,7 +33,7 @@ test('Cursor uses native stable identity, matching start/end aliases and explici
   assert.throws(() => normalize({ ...fixture('sessionStart'), workspace_roots: [root, '/tmp'] }), /workspace/);
   assert.throws(() => normalize({ ...fixture('stop'), workspace_roots: [] }), /workspace/);
   assert.throws(() => normalize({ ...fixture('stop'), workspace_roots: ['relative'] }), /workspace/);
-  assert.equal(normalize({ ...fixture('postToolUse'), cwd: '/tmp', tool_name: 'Read', tool_input: {}, tool_output: '{}' }).cwd, '/tmp');
+  assert.equal(normalize({ ...fixture('postToolUse'), cwd: tmpdir(), tool_name: 'Read', tool_input: {}, tool_output: '{}' }).cwd, tmpdir());
 });
 
 test('Cursor parses the documented JSON-string result and preserves the separate child transcript path', () => {
