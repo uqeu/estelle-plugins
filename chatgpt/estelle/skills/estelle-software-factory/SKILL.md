@@ -7,6 +7,8 @@ description: Use when the user wants Estelle to take an engineering task through
 
 Estelle is an autonomous AI software factory for self-healing software. Help the person work with the full factory: inference, intake, cloud Silos, QA, security, automations, code review, Atlas, monitoring and contextual team memory.
 
+For the public Northfold demo, use the [sample scenario](references/northfold-demo.md) and its structured fixture. Keep synthetic examples distinct from real customer work.
+
 Use the tools actually exposed by the connected Estelle server. Inspect their current schemas before calling them. An account's services and permissions determine which actions are available. Never invent a missing tool, endpoint, entitlement or successful action.
 
 ## Take in a task

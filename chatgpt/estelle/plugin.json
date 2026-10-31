@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "estelle",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Estelle is an autonomous AI software factory for self-healing software, bringing engineering work and operations into ChatGPT.",
   "author": {
     "name": "Fate Labs",
@@ -55,26 +55,26 @@
         "test_cases": {
           "positive": [
             {
-              "description": "Task intake and inference. Use a dedicated reviewer account. This prompt requests a plan only; it must not start a build, campaign, automation or cloud machine. A returned failed request is a failed case, not a completed plan.",
-              "prompt": "Ask Estelle to draft a plan for investigating duplicate charges when checkout retries. For now, only give me a plan; do not start work, spend on cloud machines, change code, or contact anyone.",
+              "description": "Task intake and inference. Dedicated test account with uqeu/estelle-demo-homepage indexed at e3d28b31fc9a. Ask for a plan only; no build, QA campaign, automation or cloud machine may start. All storefront payments are simulated.",
+              "prompt": "In uqeu/estelle-demo-homepage, draft a plan to investigate duplicate simulated charges when checkout retries. Plan only: do not start cloud work, QA, automations, change code, contact anyone, merge or deploy.",
               "tools_triggered": "estelle_request",
               "expected_behavior": "Call estelle_request with action=\"ask\" and text preserving the planning-only constraints. Return the actual request ID, status and answer. Explain if Estelle cannot answer. Do not claim a fix or start a spending action."
             },
             {
-              "description": "Production monitoring. Before running, seed a dedicated reviewer workspace with a synthetic issue and one uptime check. Use no customer production data. Verify both the issue and the uptime signal against the saved fixture.",
+              "description": "Production-monitoring demonstration. Dedicated test account contains one clearly labeled ReviewDemoDuplicateCharge event in retryCheckout, environment openai-review-demo, plus an uptime check named Review demo: Fate Labs public site. This is synthetic telemetry, not a real payment incident.",
               "prompt": "What needs attention in production in my reviewer workspace?",
               "tools_triggered": "monitor_overview",
               "expected_behavior": "Call monitor_overview and summarize the returned issue, alert and uptime facts with their time windows and coverage limits. If the response indicates an issue, do not describe production as entirely healthy. Do not invent incidents, merge changes or deploy."
             },
             {
-              "description": "Contextual team memory. Before running, save a sample team decision that checkout retries reuse the order payment key in the reviewer workspace, with a source citation.",
-              "prompt": "What did our team decide about payment identity when checkout retries?",
+              "description": "Contextual team-memory demonstration. Dedicated test account contains review_demo.checkout_retry_policy: a synthetic Northfold decision that retries reuse order.paymentKey, with review-fixture:northfold-checkout-retry-v1 as fixture provenance.",
+              "prompt": "What does the sample Northfold team decision say about payment identity when checkout retries?",
               "tools_triggered": "memory_chat",
               "expected_behavior": "Call memory_chat with the user's question. Report the seeded decision only when supported by returned memory and cite its source. If grounded is false or the tool refuses, explain that the decision could not be retrieved; do not invent it."
             },
             {
-              "description": "Atlas. In the reviewer account, ingest a dedicated sample repository and select its admitted Atlas outline and exact digest first. Supply the actual repository identifier in the conversation before this case.",
-              "prompt": "In the sample repository I selected, show me which part of the system handles checkout retries and explain how it fits together.",
+              "description": "Atlas demonstration. Dedicated sample repository uqeu/estelle-demo-homepage at e3d28b31fc9a must be ingested and its admitted Atlas outline selected. The sample fixture is described in skills/estelle-software-factory/references/northfold-demo.md.",
+              "prompt": "In uqeu/estelle-demo-homepage, show me which part handles checkout retries and explain how it fits together.",
               "tools_triggered": "kb_ask, kb_page",
               "expected_behavior": "Call kb_ask with the explicitly selected repository and question, then kb_page using only a returned slug. Explain the returned sources. If outline_required or another setup error occurs, name the missing setup without inventing a page. For a successful case, reviewer setup must already be complete."
             },
@@ -102,7 +102,7 @@
         }
       },
       "publication": {
-        "release_notes": "Initial OpenAI plugin package connecting ChatGPT to Estelle's hosted software factory, with workflow instructions for task intake, engineering work, QA and review, operations, Atlas and team memory.",
+        "release_notes": "Add a public Northfold demo fixture and reproducible reviewer scenarios for Estelle's software factory. Keep authentication and reviewer credentials outside the public package.",
         "countries": []
       }
     }

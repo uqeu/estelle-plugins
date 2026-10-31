@@ -6,7 +6,9 @@ Estelle is an autonomous AI software factory for self-healing software. This pac
 
 The standalone OpenAI package lives in `chatgpt/estelle/`. Its four skills cover the software factory, QA and review, production operations, and Atlas and team memory. The package includes listing metadata, five positive and three negative review cases, and an icon. It has no local hooks or runtime.
 
-This is preparation source, not an approved public listing or a verified ChatGPT installation. The initial package version is 0.1.0, independent of the coding-agent hook packages.
+This is preparation source, not an approved public listing or a verified ChatGPT installation. The ChatGPT package version lives in `chatgpt/estelle/plugin.json`, independently of the coding-agent hook packages.
+
+The [Northfold sample scenario](../../chatgpt/estelle/skills/estelle-software-factory/references/northfold-demo.md) describes the public storefront, synthetic decision and monitor event used during review preparation. The fixture contains no account credentials and does not seed itself into an account.
 
 ## Build the ZIP
 
