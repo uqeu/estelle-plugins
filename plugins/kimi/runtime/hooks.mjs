@@ -101,7 +101,8 @@ async function runAction(mode, normalized, stateDir, operation) {
   try {
     result = await operation();
     const skipped = result?.unsupported || result?.incomplete || result?.saved === false;
-    row = { status: result?.pending ? 'pending' : result?.skipped ? 'skipped' : skipped ? 'partial' : 'ok' };
+    row = result?.degraded ? { status: 'partial', code: 'recall_degraded' }
+      : { status: result?.pending ? 'pending' : result?.skipped ? 'skipped' : skipped ? 'partial' : 'ok' };
   } catch (error) {
     row = { status: 'failed', code: errorCode(error) };
     result = { failed: true, code: row.code };
@@ -124,13 +125,15 @@ async function recall(n, repo, request) {
     timeline_session: timelineIdentity(n.host, n.sessionId) };
   const result = await request('/search', body);
   if (typeof result.recall !== 'string') throw new Error('response_json');
-  return { text: result.recall || 'Estelle searched this repository’s memory and found no relevant recall.' };
+  const degraded = result.degraded === true;
+  const text = !result.recall.trim() && degraded
+    ? 'Estelle recall is temporarily unavailable. Retry with estelle_resume or memory_chat.' : result.recall;
+  return { text, degraded };
 }
 
-const START_TEXT = 'Estelle is connected through its MCP tools. Call estelle_resume before planning; use the live tool schemas. '
-  + 'Rooms coordinate sessions under their own proven identities. Never post as another session or invent a session_token. '
-  + 'Session capture can be partial; check its reported coverage before claiming a complete handoff. '
-  + 'The old per-edit grounding gate is retired. Build, test, and review changes.';
+const START_TEXT = 'If Estelle MCP tools are available, call estelle_resume before planning and use their live schemas. '
+  + 'Use only this session’s verified Room identity; never invent or borrow a token. '
+  + 'Check capture coverage before claiming a complete handoff.';
 
 /** One host event, one process. Network failures are recorded separately from successful empty results. */
 export async function handleHook({ host, payload, stateDir, request }) {
@@ -186,17 +189,20 @@ export async function handleHook({ host, payload, stateDir, request }) {
   await completedActions;
   if (context?.failed) return port.formatContext(`Estelle recall was not obtained (${context.code}). Use its MCP tools directly; this is not an empty search result.`, n.event) ?? defaultOutput();
   if (context?.text && queuedContext) {
-    const saved = await saveContext(grokContextPath, n.turnId, contextRequest, context.text);
-    await recordStatus(stateDir, { host, event: n.event, mode: 'context', status: saved ? 'pending' : 'skipped' });
+    const saved = await saveContext(grokContextPath, n.turnId, contextRequest, context.text, context.degraded);
+    await recordStatus(stateDir, { host, event: n.event, mode: 'context',
+      ...(context.degraded ? { status: 'partial', code: 'recall_degraded', pending: saved }
+        : { status: saved ? 'pending' : 'skipped' }) });
     return defaultOutput();
   }
   const contextBoundary = host === 'grok' && n.event === 'PreToolUse'
     || host === 'cursor' && ['PostToolUse', 'PostToolUseFailure'].includes(n.event);
   if (contextBoundary) {
-    const text = await takeContext(grokContextPath, n.turnId);
-    if (text) {
-      await recordStatus(stateDir, { host, event: n.event, mode: 'context', status: 'emitted' });
-      return port.formatContext(text, n.event);
+    const queued = await takeContext(grokContextPath, n.turnId);
+    if (queued) {
+      await recordStatus(stateDir, { host, event: n.event, mode: 'context',
+        ...(queued.degraded ? { status: 'partial', code: 'recall_degraded', pending: false } : { status: 'emitted' }) });
+      return port.formatContext(queued.text, n.event);
     }
   }
   if (context?.text) return port.formatContext(context.text, n.event);

@@ -37,12 +37,6 @@
         "timeout": 20
       }
     ],
-    "subagentStart": [
-      {
-        "command": "node \"${CURSOR_PLUGIN_ROOT}/runtime/cli.mjs\" hook cursor",
-        "timeout": 20
-      }
-    ],
     "subagentStop": [
       {
         "command": "node \"${CURSOR_PLUGIN_ROOT}/runtime/cli.mjs\" hook cursor",

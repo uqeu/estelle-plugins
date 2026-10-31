@@ -1,6 +1,6 @@
 {
   "name": "estelle",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Estelle MCP, memory and session hooks for coding agents.",
   "skills": [
     "./skills"
@@ -40,11 +40,6 @@
       "timeout": 20
     },
     {
-      "event": "SubagentStart",
-      "command": "node \"${KIMI_PLUGIN_ROOT}/runtime/cli.mjs\" hook kimi",
-      "timeout": 20
-    },
-    {
       "event": "SubagentStop",
       "command": "node \"${KIMI_PLUGIN_ROOT}/runtime/cli.mjs\" hook kimi",
       "timeout": 20
@@ -65,24 +60,9 @@
       "timeout": 20
     },
     {
-      "event": "PostCompact",
-      "command": "node \"${KIMI_PLUGIN_ROOT}/runtime/cli.mjs\" hook kimi",
-      "timeout": 20
-    },
-    {
       "event": "Interrupt",
       "command": "node \"${KIMI_PLUGIN_ROOT}/runtime/cli.mjs\" hook kimi",
       "timeout": 3
-    },
-    {
-      "event": "SessionHeartbeat",
-      "command": "node \"${KIMI_PLUGIN_ROOT}/runtime/cli.mjs\" hook kimi",
-      "timeout": 20
-    },
-    {
-      "event": "PostToolUseFailure",
-      "command": "node \"${KIMI_PLUGIN_ROOT}/runtime/cli.mjs\" hook kimi",
-      "timeout": 20
     }
   ]
 }

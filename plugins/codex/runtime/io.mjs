@@ -146,8 +146,9 @@ export function errorCode(error) {
   return 'operation_failed';
 }
 
-export async function recordStatus(stateDir, { host, event, mode, status, code }) {
-  const row = { at: new Date().toISOString(), host, event, mode, status, ...(code ? { code } : {}) };
+export async function recordStatus(stateDir, { host, event, mode, status, code, pending }) {
+  const row = { at: new Date().toISOString(), host, event, mode, status, ...(code ? { code } : {}),
+    ...(typeof pending === 'boolean' ? { pending } : {}) };
   // One bounded record per host/mode; no prompts, paths, headers, tokens, or remote response text.
   if (!/^[a-z-]+$/.test(host) || !/^[a-z-]+$/.test(mode)) throw new Error('unsupported_host');
   await writeJson(join(stateDir, 'status', `${host}-${mode}.json`), row);

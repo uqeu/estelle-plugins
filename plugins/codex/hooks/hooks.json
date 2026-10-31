@@ -99,17 +99,6 @@
         ]
       }
     ],
-    "PostCompact": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${PLUGIN_ROOT}/runtime/cli.mjs\" hook codex",
-            "timeout": 20
-          }
-        ]
-      }
-    ],
     "Interrupt": [
       {
         "hooks": [

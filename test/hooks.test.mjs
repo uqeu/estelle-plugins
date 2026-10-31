@@ -114,7 +114,7 @@ test('assembled Codex prompt uses the native schema and failure context differs 
     model: 'fixture-model', turn_id: 'fixture-turn', permission_mode: 'default', prompt: 'Explain the parser' };
   const empty = await handleHook({ host: 'codex', payload, stateDir: f.stateDir,
     request: async route => route === '/search' ? { recall: '' } : {} });
-  assert.match(empty.hookSpecificOutput.additionalContext, /found no relevant recall/);
+  assert.equal(empty, null, 'a successful empty recall adds no model context');
   const failure = await handleHook({ host: 'codex', payload, stateDir: f.stateDir,
     request: async () => { const error = new Error('fixture offline'); error.status = 503; throw error; } });
   assert.match(failure.hookSpecificOutput.additionalContext, /not obtained \(http_503\)/);
@@ -288,4 +288,86 @@ test('Grok tool hook streams its transcript dialect and SessionEnd drains into c
   assert.equal(saved.body.client.name, 'grok');
   assert.equal(saved.body.client.format_verified, false);
   assert.match(saved.body.messages[0].content, /Explain the parser/);
+});
+
+test('all five prompt hooks keep successful empty recall silent and retain useful context', async t => {
+  const f = await fixture(t);
+  const previousHome = process.env.KIMI_CODE_HOME;
+  process.env.KIMI_CODE_HOME = join(f.directory, 'empty-kimi-home');
+  t.after(() => { if (previousHome === undefined) delete process.env.KIMI_CODE_HOME; else process.env.KIMI_CODE_HOME = previousHome; });
+  const cases = [
+    ['claude-code', claudePayload(f, 'UserPromptSubmit', { prompt: 'Explain parser' }), null],
+    ['codex', { ...claudePayload(f, 'UserPromptSubmit'), model: 'fixture', turn_id: 'turn',
+      permission_mode: 'default', prompt: 'Explain parser' }, null],
+    ['kimi', { hook_event_name: 'UserPromptSubmit', session_id: 'quiet-kimi', cwd: f.root, prompt: 'Explain parser' }, null],
+    ['grok', { hookEventName: 'user_prompt_submit', sessionId: 'quiet-grok', cwd: f.root, promptId: 'turn', prompt: 'Explain parser' }, null],
+    ['cursor', { hook_event_name: 'beforeSubmitPrompt', conversation_id: 'quiet-cursor', generation_id: 'turn',
+      workspace_roots: [f.root], prompt: 'Explain parser' }, { continue: true }],
+  ];
+  for (const [host, payload, nativeDefault] of cases) {
+    const calls = [];
+    const request = async (route, body) => { calls.push({ route, body }); return route === '/search' ? { recall: '', degraded: false, chunk_push_skipped: true } : {}; };
+    const result = await handleHook({ host, payload, stateDir: f.stateDir, request });
+    assert.deepEqual(result, nativeDefault, `${host}: empty recall must not add model context`);
+    const search = calls.find(call => call.route === '/search');
+    assert.ok(search, `${host}: silence must follow a real search`);
+    assert.equal(search.body.code, false, `${host}: automatic recall must not request code context`);
+    const row = JSON.parse(await readFile(join(f.stateDir, 'status', `${host}-context.json`), 'utf8'));
+    assert.equal(row.status, 'ok', `${host}: an empty success is not a failure`);
+    const positive = await handleHook({ host, payload, stateDir: f.stateDir,
+      request: async route => route === '/search' ? { recall: 'useful remembered decision' } : {} });
+    if (['grok', 'cursor'].includes(host)) {
+      const tool = host === 'grok' ? { ...payload, hookEventName: 'pre_tool_use', toolName: 'Read', toolInput: {} }
+        : { ...payload, hook_event_name: 'postToolUse', tool_name: 'Read', tool_input: {}, tool_output: '{}' };
+      const emitted = await handleHook({ host, payload: tool, stateDir: f.stateDir, request });
+      assert.match(JSON.stringify(emitted), /useful remembered decision/, `${host}: useful recall must reach its supported boundary`);
+    } else assert.match(JSON.stringify(positive), /useful remembered decision/, `${host}: useful recall must still be delivered`);
+  }
+});
+
+test('startup context does not report an authenticated MCP connection without testing it', async t => {
+  const f = await fixture(t);
+  const result = await handleHook({ host: 'claude-code', payload: claudePayload(f, 'SessionStart'),
+    stateDir: f.stateDir, request: async () => ({}) });
+  assert.match(result.hookSpecificOutput.additionalContext, /estelle_resume/);
+  assert.doesNotMatch(result.hookSpecificOutput.additionalContext, /is connected/);
+});
+
+test('all five hosts distinguish degraded empty recall from a healthy empty result without losing rules', async t => {
+  const f = await fixture(t);
+  const previousHome = process.env.KIMI_CODE_HOME;
+  process.env.KIMI_CODE_HOME = join(f.directory, 'empty-kimi-home');
+  t.after(() => { if (previousHome === undefined) delete process.env.KIMI_CODE_HOME; else process.env.KIMI_CODE_HOME = previousHome; });
+  const cases = [
+    ['claude-code', claudePayload(f, 'UserPromptSubmit', { prompt: 'Explain parser' })],
+    ['codex', { ...claudePayload(f, 'UserPromptSubmit'), model: 'fixture', turn_id: 'turn', permission_mode: 'default', prompt: 'Explain parser' }],
+    ['kimi', { hook_event_name: 'UserPromptSubmit', session_id: 'degraded-kimi', cwd: f.root, prompt: 'Explain parser' }],
+    ['grok', { hookEventName: 'user_prompt_submit', sessionId: 'degraded-grok', cwd: f.root, promptId: 'turn', prompt: 'Explain parser' }],
+    ['cursor', { hook_event_name: 'beforeSubmitPrompt', conversation_id: 'degraded-cursor', generation_id: 'turn', workspace_roots: [f.root], prompt: 'Explain parser' }],
+  ];
+  for (const [host, payload] of cases) await t.test(host, async () => {
+    const queued = ['grok', 'cursor'].includes(host);
+    const tool = host === 'grok' ? { ...payload, hookEventName: 'pre_tool_use', toolName: 'Read', toolInput: {} }
+      : { ...payload, hook_event_name: 'postToolUse', tool_name: 'Read', tool_input: {}, tool_output: '{}' };
+    const run = (input, recall) => handleHook({ host, payload: input, stateDir: f.stateDir,
+      request: async route => route === '/search' ? { recall, degraded: true, chunk_push_skipped: true } : {} });
+    const promptOutput = await run(payload, '');
+    if (queued) {
+      assert.deepEqual(promptOutput, host === 'cursor' ? { continue: true } : null);
+      const pending = JSON.parse(await readFile(join(f.stateDir, 'status', `${host}-context.json`), 'utf8'));
+      assert.equal(pending.status, 'partial', `${host}: pending delivery must not hide failed retrieval`);
+      assert.equal(pending.pending, true);
+    }
+    const output = queued ? await run(tool, '') : promptOutput;
+    assert.match(JSON.stringify(output), /recall.*unavailable/i, `${host}: degraded empty response must deliver an actionable notice`);
+    assert.match(JSON.stringify(output), /estelle_resume|memory_chat/, `${host}: notice must name a recovery action`);
+    const row = JSON.parse(await readFile(join(f.stateDir, 'status', `${host}-context.json`), 'utf8'));
+    assert.deepEqual({ status: row.status, code: row.code }, { status: 'partial', code: 'recall_degraded' });
+    const rules = 'Repository rule: use the recorded project test command.';
+    const rulesPrompt = await run(payload, rules);
+    const rulesOutput = queued ? await run(tool, '') : rulesPrompt;
+    const text = host === 'cursor' ? rulesOutput.additional_context : host === 'kimi' ? rulesOutput.message
+      : rulesOutput.hookSpecificOutput.additionalContext;
+    assert.equal(text, rules, `${host}: returned context and rules must remain unchanged even when degraded`);
+  });
 });
