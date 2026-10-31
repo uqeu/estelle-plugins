@@ -92,15 +92,21 @@ export async function captureTree({ cwd, selectedUntracked = [] }) {
   return { repo: repo.name, baseCommit: before.head, tree, bytes: total };
 }
 
-export async function prepareTreeContinuation(options) {
+export async function captureTreeArtifact(options) {
   if (options.consent !== true || options.replace !== true) throw new Error('native_consent_required');
-  if (!options.siloId) throw new Error('native_selection');
   const captured = await captureTree(options);
   const transcript = await captureNativeTranscript(options);
   if (captured.bytes + Buffer.byteLength(transcript) > NATIVE_LIMITS.bytes) throw new Error('native_artifact_bound');
-  return { action: 'restore_native', silo_id: options.siloId, native: { consent: true, replace: true,
+  return { repo: captured.repo, native: { consent: true, replace: true,
     harness: options.harness, session_id: options.sessionId, base_commit: captured.baseCommit, transcript,
     tree: captured.tree } };
+}
+
+export async function prepareTreeContinuation(options) {
+  if (options.consent !== true || options.replace !== true) throw new Error('native_consent_required');
+  if (!options.siloId) throw new Error('native_selection');
+  const { native } = await captureTreeArtifact(options);
+  return { action: 'restore_native', silo_id: options.siloId, native };
 }
 
 export async function continueTreeCloud(options, request = apiClient({ timeoutMs: 80_000, deadline: Date.now() + 80_000 })) {

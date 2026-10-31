@@ -63,6 +63,19 @@ if (command === 'doctor') {
       console.error('Estelle could not save hook diagnostics. Check the plugin data directory permissions.');
     }
   }
+} else if (command === 'prepare-cloud' || command === 'stage-cloud') {
+  try {
+    const { parseStageArguments, prepareCloud, stageCloud } = await import('./native-stage.mjs');
+    const options = parseStageArguments(process.argv.slice(3));
+    const result = await (command === 'prepare-cloud' ? prepareCloud(options) : stageCloud(options));
+    console.log(JSON.stringify(result));
+    if (result.outcome === 'incomplete') process.exitCode = 1;
+  } catch (error) {
+    const { nativeErrorCode } = await import('./native-export.mjs');
+    const recovery = command === 'stage-cloud' ? ' Check your personal cloud workspaces before retrying a paid request.' : '';
+    console.error(`Cloud preparation did not finish (${nativeErrorCode(error)}). No automatic retry or safe-to-close acknowledgment was issued.${recovery}`);
+    process.exitCode = 1;
+  }
 } else if (command === 'continue-cloud') {
   try {
     const { runNativeContinue } = await import('./native-export.mjs');
@@ -73,6 +86,6 @@ if (command === 'doctor') {
     process.exitCode = 1;
   }
 } else {
-  console.error('Usage: node runtime/cli.mjs hook <claude-code|codex|kimi|grok|cursor> | doctor');
+  console.error('Usage: node runtime/cli.mjs hook <claude-code|codex|kimi|grok|cursor> | doctor | continue-cloud | prepare-cloud | stage-cloud');
   process.exitCode = 1;
 }

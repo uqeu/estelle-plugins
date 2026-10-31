@@ -18,7 +18,8 @@ const SAFE_CODES = new Set(['native_artifact_bound', 'native_artifact_changed', 
   'native_selection', 'native_repository', 'native_private_reasoning_unsupported', 'native_credential_field',
   'native_consent_required', 'native_staged_changes_unsupported', 'native_untracked_changes_unsupported',
   'native_tree_transport_unsupported', 'native_untracked_selection_required', 'native_restore_unverified', 'native_index_state_unsupported',
-  'native_receipt_mismatch', 'native_scalar_bound', 'native_reserved_path', 'native_source_credential_or_binary', 'native_file_mode_unsupported', 'native_arguments']);
+  'native_receipt_mismatch', 'native_scalar_bound', 'native_reserved_path', 'native_source_credential_or_binary', 'native_file_mode_unsupported', 'native_arguments',
+  'native_stage_arguments', 'native_provision_consent_required', 'native_staging_unsupported']);
 export const nativeErrorCode = error => SAFE_CODES.has(error?.message) ? error.message : errorCode(error);
 const inside = (root, file) => {
   const rel = relative(root, file);
