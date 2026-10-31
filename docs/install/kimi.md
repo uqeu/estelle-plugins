@@ -1,39 +1,70 @@
 # Kimi Code
 
-Package: `plugins/kimi`. Requires Node.js 22 and `ESTELLE_API_KEY` in the host environment.
+Install directly from GitHub after these three prerequisites:
 
-In a terminal, prepare the local package:
+1. Kimi Code is installed and supports native plugins.
+2. External Node.js 22 or later is available as `node` to the actual Kimi process. A bundled host
+   runtime does not establish that external hook commands can find Node.
+3. You have a valid `ESTELLE_API_KEY` from your Estelle account, with access to the hosted service,
+   and the key is available in Kimi's environment.
+
+The plugin does not install Kimi or Node, or create an account. No backend clone or Estelle CLI is needed.
+From the environment that launches Kimi, check Node and key presence without printing the key:
 
 ```sh
-git clone https://github.com/uqeu/estelle-plugins.git
+node --version
+node -e "console.log(process.env.ESTELLE_API_KEY ? 'ESTELLE_API_KEY present' : 'ESTELLE_API_KEY missing')"
 ```
 
-Inside the **interactive Kimi TUI**, use the clone's absolute path:
+Presence is not authentication. On macOS and Windows, a GUI app launched from the Dock or Start menu
+may not inherit your terminal's PATH or environment. These terminal checks cover only that environment;
+Kimi's actual process must have the same Node/key access. Validate authentication separately below.
+
+Inside the **interactive Kimi TUI**:
 
 ```text
-/plugins install /absolute/path/to/estelle-plugins/plugins/kimi
+/plugins install https://github.com/uqeu/estelle-plugins
 /plugins info estelle
 /reload
 ```
 
-The native installer copies the local package; reinstall after updating the clone. `/reload` or
-`/new` applies plugin changes to a session. Check the installed version and diagnostics with
-`/plugins info estelle`, then check MCP authentication and actual hook execution separately.
-Installing the package alone does not run its hooks.
+The GitHub URL selects the latest published GitHub release. That release must contain the repository-root
+`kimi.plugin.json`; updating `main` alone does not update what this URL installs. Check the installed
+version and diagnostics with `/plugins info estelle`. `/reload` or `/new` applies the plugin to a session.
+Verify MCP authentication and actual hook execution separately; an installed package proves neither.
 
-**Do not run `kimi -p '/plugins install …'`.** `-p` sends a model prompt in non-interactive mode;
-it does not open the TUI command handler. If an installer agent cannot operate the interactive
-TUI, it should prepare and check the package, then give you one exact `/plugins install` command
-with the resolved absolute path. Report that native installation is still pending. Do not launch
-nested model turns, repeat research, or claim success from a prepared clone.
+## Fresh Estelle registration
+
+If Estelle is already registered and you want to install it again from GitHub, use these native commands:
+
+```text
+/plugins remove estelle
+/reload
+/plugins install https://github.com/uqeu/estelle-plugins
+/plugins info estelle
+/reload
+```
+
+Native removal removes the plugin registration. It leaves the managed plugin copy and original source
+files on disk. A successful native reinstall stages the new package, replaces the managed copy and
+removes its previous copy; no manual cache deletion is needed. This is a fresh
+Estelle registration, not a wipe of your Kimi history or Estelle account. Keep your chats, Kimi home,
+other plugin registrations and shared memories. Do not delete global `~/.estelle-plugins` state, which
+other coding hosts also use. [Migrate verified old CLI hooks](../migration/from-cli.md) separately.
+
+**Do not run `kimi -p '/plugins …'`.** `-p` sends a model prompt; it does not operate the interactive
+plugin command handler. If an installer agent cannot use the TUI, it should give you the exact GitHub
+install command and report native installation pending. Do not start nested model installation tests.
+
+For contributors testing an unpublished checkout only, the native installer also accepts the absolute
+path to that checkout's `plugins/kimi` directory. A local development install does not verify the public
+GitHub install path.
 
 [Native plugin commands and reload behavior](https://www.kimi.com/code/docs/en/kimi-code-cli/customization/plugins.html)
 · [`kimi -p` contract](https://www.kimi.com/code/docs/en/kimi-code-cli/reference/kimi-command.html).
 
-[Migrate old CLI hooks](../migration/from-cli.md). The hosted backend controls permissions and tools.
-
 ## Copy/paste setup prompt
 
 ```text
-Install or update Estelle for Kimi Code from https://github.com/uqeu/estelle-plugins using plugins/kimi. Run the native install from this clone, including when reinstalling the same version. Follow docs/install/kimi.md and docs/migration/from-cli.md. Use native approval and a fresh session; preserve unrelated settings and active sessions. Remove only verified legacy Estelle hook/MCP registrations after the replacement authenticates. Keep hooks and MCP on the same environment key; never request or display credentials. Verify authentication with one advertised read-only MCP tool, then report package, MCP and hooks separately, with any pending step. Never run kimi -p '/plugins …' or spawn nested model turns as installation tests. If interactive TUI access is unavailable, prepare/check the local package and give me one exact /plugins install command with its absolute path; report installation pending.
+Check that Kimi Code is installed and that its actual process can find external Node.js 22+ and ESTELLE_API_KEY from my Estelle account; report any missing prerequisite without printing the key. Install Estelle with the native interactive command /plugins install https://github.com/uqeu/estelle-plugins. Follow docs/install/kimi.md and docs/migration/from-cli.md. For a fresh Estelle registration, use /plugins remove estelle and /reload first; preserve chats, unrelated settings, other hosts and shared memories. Use native approval and /reload after installation. Keep hooks and MCP on the same environment key; never request or display credentials. Verify authentication with one advertised read-only MCP tool, then report package, MCP and hooks separately, with any pending step. Do not run kimi -p '/plugins …' or launch a model turn as an installation test. If you cannot operate the interactive TUI, give me the exact GitHub install command and report installation pending.
 ```
