@@ -3,6 +3,7 @@ export const FIELD_CAP = 20_000;
 const MAX_DEPTH = 24;
 const MAX_FIELDS = 1_000;
 const SENSITIVE_KEY = /(?:secret|token|password|api[_-]?key|private[_-]?key)/i;
+export const isSensitiveField = key => SENSITIVE_KEY.test(key);
 const PATTERNS = [
   [/\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{8,}/g, '[redacted stripe key]'],
   [/\bestelle_(?:live|test)_[A-Za-z0-9_-]{8,}/g, '[redacted estelle key]'],

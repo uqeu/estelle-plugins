@@ -63,6 +63,15 @@ if (command === 'doctor') {
       console.error('Estelle could not save hook diagnostics. Check the plugin data directory permissions.');
     }
   }
+} else if (command === 'continue-cloud') {
+  try {
+    const { runNativeContinue } = await import('./native-export.mjs');
+    console.log(JSON.stringify(await runNativeContinue(process.argv.slice(3))));
+  } catch (error) {
+    const { nativeErrorCode } = await import('./native-export.mjs');
+    console.error(`Native continuation could not be completed (${nativeErrorCode(error)}). No safe-to-close acknowledgment was issued.`);
+    process.exitCode = 1;
+  }
 } else {
   console.error('Usage: node runtime/cli.mjs hook <claude-code|codex|kimi|grok|cursor> | doctor');
   process.exitCode = 1;
