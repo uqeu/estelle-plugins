@@ -2,18 +2,23 @@
 
 Package: `plugins/cursor`. Requires Node.js 22 and `ESTELLE_API_KEY` in the host environment.
 
-```text
-In Cursor Agent Chat, enter /add-plugin and add:
-https://github.com/uqeu/estelle-plugins
-Select Estelle from this repository’s Cursor marketplace.
-```
+Use the editor's Customize page to install from an available marketplace. For a Git repository
+not already available there, use a team marketplace import if your plan permits it, or Cursor's
+[documented local plugin loading](https://cursor.com/docs/plugins#test-plugins-locally): copy the
+contents of `plugins/cursor` into a new `~/.cursor/plugins/local/estelle` directory, then run
+**Developer: Reload Window**. Review an existing installation before replacing it. Local imports
+must be allowed; an installed marketplace plugin with the same name takes precedence.
 
-Install through Cursor’s editor. Ensure its process inherits `ESTELLE_API_KEY`; do not paste the key into a shared plugin variable. Customize → Hooks and MCP show status. A terminal executable named `agent` is not proof that Cursor is installed.
+Ensure the editor process inherits `ESTELLE_API_KEY`; do not paste the key into a shared plugin
+variable. Check the plugin components, Hooks and MCP in Customize after reload. A terminal
+executable named `agent` does not prove that the editor loaded this plugin. Native Cursor
+authentication and hook execution still need to be observed in that editor before reporting them
+as working. [Cursor's installation and management contract](https://cursor.com/docs/plugins).
 
 [Migrate old CLI hooks](../migration/from-cli.md). The hosted backend controls permissions and tools.
 
 ## Copy/paste setup prompt
 
 ```text
-Set up Estelle for Cursor from https://github.com/uqeu/estelle-plugins using plugins/cursor. Read its README and docs/install/cursor.md. Check this host’s installed version and current Estelle plugin/MCP/hook registrations first; do not change unrelated settings or an active session’s configuration. Use the native installation instructions above. Disable the old estelle@fatelabs plugin through the native manager. If old CLI-backed user/project hooks coexist, back up the affected config and remove only verified old Estelle rows while preserving other hooks. Do not edit plugin caches or trust fingerprints. Ensure hooks and MCP use the same ESTELLE_API_KEY in the host environment; never print its value or ask for it in chat. Use normal trust approval and restart in a fresh session. Report package installation, MCP registration, authenticated connection, hook execution, acknowledged uploads and Rooms support separately. Do not call an unavailable transcript or deferred save complete. Do not launch paid cloud/model work as an installation test.
+Install or update Estelle for Cursor from https://github.com/uqeu/estelle-plugins using plugins/cursor. Follow docs/install/cursor.md and docs/migration/from-cli.md. Use native approval and a fresh session; preserve unrelated settings and active sessions. Remove only verified legacy Estelle hook/MCP registrations after the replacement authenticates. Keep hooks and MCP on the same environment key; never request or display credentials. Verify authentication with one advertised read-only MCP tool, then report package, MCP and hooks separately, with any pending step. No paid installation tests.
 ```

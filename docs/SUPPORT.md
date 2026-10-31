@@ -2,7 +2,7 @@
 
 | Feature | Claude Code | Codex | Kimi Code | Grok Build | Cursor |
 |---|---|---|---|---|---|
-| Native plugin and hosted MCP | Yes | Yes | Yes | Yes | Yes |
+| Native package and MCP configuration | Included | Included | Included | Included | Included |
 | Skills | Yes | Yes | Yes | Yes | Yes |
 | Commands | Native | Plugin skills | Native | Native | Native |
 | Startup instructions | Hook context | Hook context | Startup skill | Skills/MCP | Rule and hook context |
@@ -11,6 +11,10 @@
 | Checkpoints | Bounded conversation | Bounded conversation | Active main-agent branch | Bounded conversation (inferred dialect) | Bounded conversation (inferred dialect) |
 | Exit save | Reference; retry later | Reference; retry later | Reference; retry later | Reference; retry later | Reference; retry later |
 | Model-request observation | No | Native observers | No | No | No |
+
+This table describes packaged paths, not a claim that a particular installation has run. Check
+package loading, MCP authentication and actual hook execution separately. Successful empty recall
+adds no context; failures retain a separate local status and supported context-bearing errors.
 
 Hooks require a usable `ESTELLE_API_KEY`; a separate MCP OAuth login does not establish hook
 identity. Captures omit media bytes and private/encrypted reasoning. Bounds, missing transcripts,

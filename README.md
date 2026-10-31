@@ -22,7 +22,7 @@ Paste the matching prompt into your coding agent.
 <summary>Claude Code</summary>
 
 ```text
-Install Estelle for Claude Code from https://github.com/uqeu/estelle-plugins. Follow docs/install/claude.md and install plugins/claude. Replace only old Estelle CLI-backed hooks, preserve unrelated settings, and never display credentials. Use normal plugin approval and a fresh session. Check installation and authenticated MCP separately; explain any setup that still needs me.
+Install or update Estelle for Claude Code from https://github.com/uqeu/estelle-plugins using plugins/claude. Follow docs/install/claude.md and docs/migration/from-cli.md. Preserve unrelated settings and active sessions; remove only verified legacy Estelle hook/MCP registrations. Never request or display credentials. Use native approval and a fresh session. Verify authentication with one advertised read-only MCP tool, then report package, MCP and hooks separately, with any pending step.
 ```
 
 </details>
@@ -31,7 +31,7 @@ Install Estelle for Claude Code from https://github.com/uqeu/estelle-plugins. Fo
 <summary>Codex</summary>
 
 ```text
-Install Estelle for Codex from https://github.com/uqeu/estelle-plugins. Follow docs/install/codex.md and install plugins/codex. Replace only old Estelle CLI-backed hooks, preserve unrelated settings, and never display credentials. Use normal plugin approval and a fresh session. Check installation and authenticated MCP separately; explain any setup that still needs me.
+Install or update Estelle for Codex from https://github.com/uqeu/estelle-plugins using plugins/codex. Follow docs/install/codex.md and docs/migration/from-cli.md. Preserve unrelated settings and active sessions; remove only verified legacy Estelle hook/MCP registrations. Never request or display credentials. Use native approval and a fresh session. Verify authentication with one advertised read-only MCP tool, then report package, MCP and hooks separately, with any pending step.
 ```
 
 </details>
@@ -40,7 +40,7 @@ Install Estelle for Codex from https://github.com/uqeu/estelle-plugins. Follow d
 <summary>Kimi Code</summary>
 
 ```text
-Install Estelle for Kimi Code from https://github.com/uqeu/estelle-plugins. Follow docs/install/kimi.md and install plugins/kimi from a local clone using Kimi's native installer. Replace only old Estelle CLI-backed hooks, preserve unrelated settings, and never display credentials. Use normal plugin approval and a fresh session. Check installation and authenticated MCP separately; explain any setup that still needs me.
+Install or update Estelle for Kimi Code from https://github.com/uqeu/estelle-plugins using plugins/kimi. Run the native install from this clone, including when reinstalling the same version. Follow docs/install/kimi.md and docs/migration/from-cli.md. Preserve unrelated settings and active sessions; remove only verified legacy Estelle hook/MCP registrations. Never request or display credentials. Use native approval and a fresh session. Verify authentication with one advertised read-only MCP tool, then report package, MCP and hooks separately, with any pending step. Never run kimi -p '/plugins …' or spawn nested model installation tests. If you cannot operate the interactive TUI, prepare/check the clone and give me one exact /plugins install command with its absolute path; report native installation pending.
 ```
 
 </details>
@@ -49,7 +49,7 @@ Install Estelle for Kimi Code from https://github.com/uqeu/estelle-plugins. Foll
 <summary>Grok Build</summary>
 
 ```text
-Install Estelle for Grok Build from https://github.com/uqeu/estelle-plugins. Follow docs/install/grok.md and install plugins/grok. Replace only old Estelle CLI-backed hooks, preserve unrelated settings, and never display credentials. Use normal plugin approval and a fresh session. Check installation and authenticated MCP separately; explain any setup that still needs me.
+Install or update Estelle for Grok Build from https://github.com/uqeu/estelle-plugins using plugins/grok. Follow docs/install/grok.md and docs/migration/from-cli.md. Preserve unrelated settings and active sessions; remove only verified legacy Estelle hook/MCP registrations. Never request or display credentials. Use native approval and a fresh session. Verify authentication with one advertised read-only MCP tool, then report package, MCP and hooks separately, with any pending step.
 ```
 
 </details>
@@ -58,12 +58,13 @@ Install Estelle for Grok Build from https://github.com/uqeu/estelle-plugins. Fol
 <summary>Cursor</summary>
 
 ```text
-Install Estelle for Cursor from https://github.com/uqeu/estelle-plugins. Follow docs/install/cursor.md and install plugins/cursor through Cursor's editor. Replace only old Estelle CLI-backed hooks, preserve unrelated settings, and never display credentials. Use normal plugin approval and a fresh session. Check installation and authenticated MCP separately; explain any setup that still needs me.
+Install or update Estelle for Cursor from https://github.com/uqeu/estelle-plugins using plugins/cursor. Follow docs/install/cursor.md and docs/migration/from-cli.md. Preserve unrelated settings and active sessions; remove only verified legacy Estelle hook/MCP registrations. Never request or display credentials. Use native approval and a fresh session. Verify authentication with one advertised read-only MCP tool, then report package, MCP and hooks separately, with any pending step.
 ```
 
 </details>
 
 Includes MCP connections, coding skills, recall hooks and local credential-pattern protection.
+Successful empty recall adds no context. Hook execution alone does not establish MCP authentication.
 All five hosts support bounded conversation capture. The Grok and Cursor transcript dialects are
 inferred from the hook payload contract, not yet verified against a live host session, so their
 captures disclose `format_verified: false` and must not be described as a complete handoff.

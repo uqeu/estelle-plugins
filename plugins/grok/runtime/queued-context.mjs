@@ -30,13 +30,13 @@ async function restore(claimed, path) {
   catch (error) { if (error.code !== 'EEXIST') throw error; return false; }
 }
 
-export async function saveContext(path, turnId, requestId, text) {
+export async function saveContext(path, turnId, requestId, text, degraded = false) {
   const claimed = await claim(path, true);
   if (!claimed) return false;
   try {
     const stored = await readJson(claimed);
     const matches = stored.turnId === turnId && stored.requestId === requestId;
-    if (matches) await writeJson(claimed, { ...stored, text });
+    if (matches) await writeJson(claimed, { ...stored, text, degraded: degraded === true });
     const restored = await restore(claimed, path);
     return matches && restored;
   } finally { await unlink(claimed); }
@@ -48,7 +48,7 @@ export async function takeContext(path, turnId) {
   if (!claimed) return null;
   try {
     const stored = await readJson(claimed);
-    if (stored.turnId === turnId && typeof stored.text === 'string' && stored.text) return stored.text;
+    if (stored.turnId === turnId && typeof stored.text === 'string' && stored.text) return { text: stored.text, degraded: stored.degraded === true };
     await restore(claimed, path);
     return null;
   } finally { await unlink(claimed); }
