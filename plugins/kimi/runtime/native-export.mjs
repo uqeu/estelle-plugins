@@ -1,3 +1,4 @@
+import { nativeGit, indexState, indexSpelling } from './native-index.mjs';
 import { open, realpath, lstat } from 'node:fs/promises';
 import { resolve, relative, isAbsolute, sep, basename } from 'node:path';
 import { homedir } from 'node:os';
@@ -16,14 +17,15 @@ const digest = text => createHash('sha256').update(text).digest('hex');
 const SAFE_CODES = new Set(['native_artifact_bound', 'native_artifact_changed', 'native_artifact_shape',
   'native_selection', 'native_repository', 'native_private_reasoning_unsupported', 'native_credential_field',
   'native_consent_required', 'native_staged_changes_unsupported', 'native_untracked_changes_unsupported',
-  'native_scalar_bound', 'native_reserved_path', 'native_source_credential_or_binary', 'native_file_mode_unsupported', 'native_arguments']);
+  'native_tree_transport_unsupported', 'native_untracked_selection_required', 'native_restore_unverified', 'native_index_state_unsupported',
+  'native_receipt_mismatch', 'native_scalar_bound', 'native_reserved_path', 'native_source_credential_or_binary', 'native_file_mode_unsupported', 'native_arguments']);
 export const nativeErrorCode = error => SAFE_CODES.has(error?.message) ? error.message : errorCode(error);
 const inside = (root, file) => {
   const rel = relative(root, file);
   return rel && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 };
 
-async function readExact(path, limit = MAX_BYTES, expected = null) {
+export async function readNativeBytes(path, limit = MAX_BYTES, expected = null) {
   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const info = await handle.stat();
@@ -33,8 +35,18 @@ async function readExact(path, limit = MAX_BYTES, expected = null) {
     const out = await handle.read(bytes, 0, bytes.length, 0);
     const after = await handle.stat();
     if (out.bytesRead !== info.size || after.size !== info.size || after.mtimeMs !== info.mtimeMs) throw new Error('native_artifact_changed');
-    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes.subarray(0, out.bytesRead));
+    return bytes.subarray(0, out.bytesRead);
   } finally { await handle.close(); }
+}
+async function readExact(path, limit = MAX_BYTES, expected = null) {
+  return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(await readNativeBytes(path, limit, expected));
+}
+export const NATIVE_LIMITS = Object.freeze({ bytes: MAX_BYTES, files: MAX_FILES, blobBytes: 8192 });
+export function checkNativeRelativePath(path) {
+  if (typeof path !== 'string' || !path || path.length > 512 || path.split('/').length > 32
+      || path.split('/').some(part => !part || part === '.' || part === '..' || RESERVED.has(part.toLowerCase()) || part.toLowerCase().startsWith('.env.'))
+      || /[\x00-\x1f\\]/.test(path)) throw new Error('native_reserved_path');
+  return path;
 }
 
 function nativeUsage(key, value) {
@@ -77,12 +89,25 @@ function scrubJsonl(text, harness, sessionId) {
   return rows.map(value => JSON.stringify(value)).join('\n') + '\n';
 }
 
+export async function captureNativeTranscript({ harness, sessionId, transcriptPath, home = homedir() }) {
+  if (!['claude-code', 'codex'].includes(harness) || !UUID.test(sessionId || '')) throw new Error('native_selection');
+  const root = resolve(home, harness === 'codex' ? '.codex/sessions' : '.claude/projects');
+  const source = resolve(transcriptPath);
+  const sourceInfo = await lstat(source);
+  if (!inside(root, source) || sourceInfo.isSymbolicLink() || !inside(await realpath(root), await realpath(source))) throw new Error('native_reserved_path');
+  if (!basename(source).endsWith(`${sessionId}.jsonl`)) throw new Error('native_selection');
+  return scrubJsonl(await readExact(source, MAX_BYTES, sourceInfo), harness, sessionId);
+}
+
 export async function prepareContinuation({ harness, sessionId, transcriptPath, cwd, siloId, home = homedir(), consent, replace }) {
   if (consent !== true || replace !== true) throw new Error('native_consent_required');
   if (!['claude-code', 'codex'].includes(harness) || !UUID.test(sessionId || '') || !siloId) throw new Error('native_selection');
   const repo = repository(cwd);
   if (!repo) throw new Error('native_repository');
-  const run = (args, options = {}) => git(repo.root, args, { strict: true, ...options });
+  const run = nativeGit(repo.root);
+  const indexBefore = indexState(run);
+  const canonicalRoot = await realpath(repo.root);
+  await indexSpelling(canonicalRoot, indexBefore);
   const baseCommit = run(['rev-parse', 'HEAD']);
   if (!/^[a-f0-9]{40}$/.test(baseCommit)) throw new Error('native_repository');
   // This first transport refuses states it cannot preserve rather than turning staged work into
@@ -94,9 +119,7 @@ export async function prepareContinuation({ harness, sessionId, transcriptPath, 
   const files = [];
   const observed = [];
   for (const path of paths) {
-    if (path.split('/').some(part => RESERVED.has(part.toLowerCase()) || part.toLowerCase().startsWith('.env.')) || /[\x00-\x1f\\]/.test(path)) {
-      throw new Error('native_reserved_path');
-    }
+    checkNativeRelativePath(path);
     const full = resolve(repo.root, path);
     const info = await lstat(full); // Deletion or symlink is a refusal, never an empty file.
     const canonical = await realpath(full);
@@ -111,12 +134,7 @@ export async function prepareContinuation({ harness, sessionId, transcriptPath, 
     files.push({ path, text, sha256: digest(text) });
     observed.push({ full, info });
   }
-  const root = resolve(home, harness === 'codex' ? '.codex/sessions' : '.claude/projects');
-  const source = resolve(transcriptPath);
-  const sourceInfo = await lstat(source);
-  if (!inside(root, source) || sourceInfo.isSymbolicLink() || !inside(await realpath(root), await realpath(source))) throw new Error('native_reserved_path');
-  if (!basename(source).endsWith(`${sessionId}.jsonl`)) throw new Error('native_selection');
-  const transcript = scrubJsonl(await readExact(source, MAX_BYTES, sourceInfo), harness, sessionId);
+  const transcript = await captureNativeTranscript({ harness, sessionId, transcriptPath, home });
   if (run(['diff', '--cached', '--name-only', '-z'], { raw: true }) || run(['ls-files', '--others', '--exclude-standard', '-z'], { raw: true })) throw new Error('native_artifact_changed');
   if (run(['rev-parse', 'HEAD']) !== baseCommit || run(['diff', '--name-only', '-z', 'HEAD', '--'], { raw: true }).split('\0').filter(Boolean).join('\0') !== paths.join('\0')) throw new Error('native_artifact_changed');
   for (const { full, info } of observed) {
@@ -124,6 +142,8 @@ export async function prepareContinuation({ harness, sessionId, transcriptPath, 
     if (current.ino !== info.ino || current.dev !== info.dev || current.mode !== info.mode
         || current.size !== info.size || current.mtimeMs !== info.mtimeMs) throw new Error('native_artifact_changed');
   }
+  await indexSpelling(canonicalRoot, indexBefore);
+  if (JSON.stringify(indexBefore) !== JSON.stringify(indexState(run))) throw new Error('native_artifact_changed');
   const body = { action: 'restore_native', silo_id: siloId, native: {
     consent: true, replace: true, harness, session_id: sessionId, base_commit: baseCommit, transcript, files,
   } };
@@ -147,11 +167,17 @@ export async function runNativeContinue(args) {
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--consent') options.consent = true;
     else if (args[i] === '--replace') options.replace = true;
+    else if (args[i] === '--preserve-tree') options.preserveTree = true;
+    else if (args[i] === '--untracked' && args[i + 1]) {
+      options.selectedUntracked ||= []; options.selectedUntracked.push(args[++i]);
+    }
     else if (names[args[i]] && args[i + 1]) {
       const name = names[args[i]];
       options[name] = args[++i];
     }
     else throw new Error('native_arguments');
   }
+  if (options.preserveTree) return (await import('./native-tree.mjs')).continueTreeCloud(options);
+  if (options.selectedUntracked) throw new Error('native_arguments');
   return continueCloud(options);
 }
