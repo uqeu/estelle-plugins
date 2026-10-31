@@ -1,6 +1,7 @@
 // Bounded conversation checkpoint client, ported from the public CLI contract.
 import { open } from 'node:fs/promises';
 import { redact, sanitize } from './redact.mjs';
+import { cloudExecutionIdentity } from './identity.mjs';
 import { safeSession } from './stream.mjs';
 import { readKimiHistory } from './kimi-history.mjs';
 
@@ -128,6 +129,8 @@ export async function readTranscriptMessages({ path, host, subagent = false }) {
 
 /** SessionEnd is deliberately delegated to the caller's durable reference queue, without filesystem/network work. */
 export async function checkpointSession({ payload, host, repo, stateDir, request }) {
+  if (cloudExecutionIdentity()) return { saved: false, unsupported: true,
+    reason: 'Cloud transcript checkpoints require a private owner-bound storage door; visible event streaming remains separate.' };
   if (host === 'cursor') return { saved: false, unsupported: true, reason: 'Cursor transcript dialect is not verified' };
   if (payload.hook_event_name === 'SessionEnd') return { saved: false, deferred: true };
   if (!safeSession(payload.session_id)) throw new Error('invalid host session identity');
