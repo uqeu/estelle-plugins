@@ -223,7 +223,7 @@ test('indexed metadata inventory bound refuses before opening any repository dir
   await assert.rejects(indexSpelling('/must-not-read', { tagged: 'H a\0'.repeat(10_001) }), /artifact_bound/);
 });
 
-test('ignored case-only rename during blob capture is caught by final spelling observation', async t => {
+test('case-only rename during blob capture refuses the snapshot on either filesystem type', async t => {
   const f = await fixture(t), shim = join(f.root, 'bin'); await mkdir(shim);
   await writeFile(join(f.cwd, '.gitignore'), 'APP.py\n'); f.git(['add', '.gitignore']); f.git(['commit', '-m', 'ignore alternate']);
   await writeFile(join(f.cwd, 'delete.py'), 'visible edit\n');
@@ -232,7 +232,9 @@ test('ignored case-only rename during blob capture is caught by final spelling o
   const source = `#!${process.execPath}\nimport { execFileSync } from 'node:child_process';\nimport { existsSync, renameSync, writeFileSync } from 'node:fs';\nconst args = process.argv.slice(2);\nconst output = execFileSync(${JSON.stringify(actualGit)}, args);\nif (args.includes('cat-file') && args.includes('blob') && !existsSync(${JSON.stringify(counter)})) {\n writeFileSync(${JSON.stringify(counter)}, '1');\n renameSync(${JSON.stringify(join(f.cwd, 'app.py'))}, ${JSON.stringify(join(f.cwd, 'APP.py'))});\n}\nprocess.stdout.write(output);\n`;
   await writeFile(join(shim, 'git'), source); await chmod(join(shim, 'git'), 0o755);
   const oldPath = process.env.PATH; process.env.PATH = shim + ':' + oldPath;
-  try { await assert.rejects(captureTree(f), /index_state_unsupported/); }
+  // Case-sensitive Git can detect the changed tree before the final spelling check. Either
+  // named refusal preserves the contract; accepting a snapshot after this rename does not.
+  try { await assert.rejects(captureTree(f), /^Error: native_(?:index_state_unsupported|artifact_changed)$/); }
   finally { process.env.PATH = oldPath; }
   assert.equal(await (await import('node:fs/promises')).readFile(counter, 'utf8'), '1');
 });
