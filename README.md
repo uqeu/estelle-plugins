@@ -4,7 +4,7 @@ Estelle for Claude Code, Codex, Kimi Code, Grok Build and Cursor. Each host has 
 under `plugins/`. They connect to `https://api.fatelabs.ca/mcp`.
 
 Requires Node.js 22 or later and `ESTELLE_API_KEY` in the agent's environment. Hooks and MCP use
-the same key. No Estelle CLI installation is needed. Version: `0.0.2`.
+the same key. No Estelle CLI installation is needed. Version: `0.0.3`.
 
 | Host | Install instructions and copy/paste setup prompt |
 |---|---|

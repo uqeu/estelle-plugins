@@ -57,19 +57,20 @@ export async function writeJson(path, value) {
   catch (error) { await unlink(temporary).catch(() => {}); throw error; }
 }
 
-export function git(cwd, args) {
+export function git(cwd, args, { strict = false, raw = false } = {}) {
   const env = { ...process.env, GIT_TERMINAL_PROMPT: '0' };
   for (const name of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR',
     'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_NAMESPACE', 'GIT_PREFIX']) delete env[name];
   try {
-    return execFileSync('git', ['-C', cwd, ...args], {
+    const output = execFileSync('git', ['-C', cwd, ...args], {
       env, encoding: 'utf8', timeout: 1500, maxBuffer: MAX_JSON_BYTES, stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-  } catch { return ''; }
+    });
+    return raw ? output : output.trim();
+  } catch { if (strict) throw new Error('git_failed'); return ''; }
 }
 
 export function repository(cwd, env = process.env) {
-  const root = git(cwd, ['rev-parse', '--show-toplevel']);
+  const root = git(cwd, ['rev-parse', '--show-toplevel'], { raw: true }).replace(/\r?\n$/, '');
   if (!root) return null;
   const remote = git(root, ['remote', 'get-url', 'origin']);
   const match = /(?:[:/])([^/:\s]+\/[^/\s]+?)(?:\.git)?$/.exec(remote);
