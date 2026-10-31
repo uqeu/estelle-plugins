@@ -9,7 +9,8 @@ export const CHECKPOINT_LIMITS = Object.freeze({
   tailBytes: 32 * 1024 * 1024, headBytes: 64 * 1024,
   records: 100_000, messages: 400, chars: 4_000, blocks: 1_000,
 });
-const HOSTS = { claude: 'claude-code', 'claude-code': 'claude-code', codex: 'codex', kimi: 'kimi-code', 'kimi-code': 'kimi-code' };
+const HOSTS = { claude: 'claude-code', 'claude-code': 'claude-code', codex: 'codex', kimi: 'kimi-code', 'kimi-code': 'kimi-code',
+  grok: 'grok', cursor: 'cursor' };
 const INJECTED = ['<environment_context', '<user_instructions', '# AGENTS.md instructions', '<skill', '<system-reminder', '<task-notification', '<command-', '<local-command', '<turn_aborted'];
 const string = value => typeof value === 'string' ? value : '';
 const shortened = text => Array.from(redact(text)).slice(0, CHECKPOINT_LIMITS.chars).join('');
@@ -60,7 +61,29 @@ function messageOf(record, host, subagent) {
     const item = record.type === 'response_item' ? record.payload : record;
     return item?.type === 'message' && ['user', 'assistant'].includes(item.role) ? item : null;
   }
+  if (host === 'cursor') {
+    // Cursor lines: {"role":"user"|"assistant","message":{"content":[...]}}; role-less control lines carry no conversation.
+    return ['user', 'assistant'].includes(record.role) ? { role: record.role, content: record.message?.content ?? record.content } : null;
+  }
+  if (host === 'grok') {
+    // Inferred dialect (not verified against a live session): ACP update lines become one message fragment
+    // per chunk; chat-history lines carry role/content directly. Tool output lines are not conversation.
+    const update = record.params?.update ?? record.update ?? (typeof record.sessionUpdate === 'string' ? record : null);
+    if (update && typeof update === 'object') {
+      const kind = update.sessionUpdate;
+      if (kind === 'user_message_chunk') return { role: 'user', content: grokContentText(update.content), chunk: true };
+      if (kind === 'agent_message_chunk') return { role: 'assistant', content: grokContentText(update.content), chunk: true };
+      return null;
+    }
+    return ['user', 'assistant'].includes(record.role) ? { role: record.role, content: record.content } : null;
+  }
   return record.type === 'context.append_message' && ['user', 'assistant'].includes(record.message?.role) ? record.message : null;
+}
+
+function grokContentText(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) return content.map(block => (typeof block?.text === 'string' ? block.text : '')).filter(Boolean).join('\n');
+  return typeof content?.text === 'string' ? content.text : '';
 }
 
 function contextOf(record, host, context) {
@@ -79,7 +102,20 @@ function checkpointText(message, counters) {
   if (!text || (message.role === 'user' && INJECTED.some(prefix => text.startsWith(prefix)))) return null;
   const clean = redact(text);
   if (Array.from(clean).length > CHECKPOINT_LIMITS.chars) counters.messages_truncated++;
-  return { role: message.role, content: shortened(clean) };
+  return { role: message.role, content: shortened(clean), ...(message.chunk ? { chunk: true } : {}) };
+}
+
+/** ACP chunk updates split one host message over many lines; merge consecutive same-role fragments. */
+function mergeChunks(messages) {
+  const merged = [];
+  for (const message of messages) {
+    const last = merged.at(-1);
+    const fits = last && Array.from(last.content).length + Array.from(message.content).length <= CHECKPOINT_LIMITS.chars;
+    if (fits && last.role === message.role && (last.chunk || message.chunk)) last.content += message.content;
+    else merged.push(message);
+    delete merged.at(-1).chunk;
+  }
+  return merged;
 }
 
 function parseWindow(buffer, host, subagent, messages, counters, context) {
@@ -119,19 +155,23 @@ export async function readTranscriptMessages({ path, host, subagent = false }) {
   for (const window of bounded.windows.toReversed()) parseWindow(window, harness, subagent, messages, counters, context);
   messages.reverse();
   const legacy = harness === 'kimi-code';
-  const partial = bounded.partial || legacy || counters.record_limit_reached || counters.partial_last_line || counters.turns_dropped > 0
+  const inferred = harness === 'grok' || harness === 'cursor';
+  if (harness === 'grok') messages.splice(0, messages.length, ...mergeChunks(messages));
+  const partial = bounded.partial || legacy || inferred || counters.record_limit_reached || counters.partial_last_line || counters.turns_dropped > 0
     || counters.invalid_lines > 0 || counters.messages_truncated > 0 || counters.blocks_truncated > 0;
   if (partial && messages.length) messages[0].content = shortened(
     '[Estelle: this checkpoint is PARTIAL. Read bounds, omitted records, or text limits apply; this is not the complete session history.]\n' + messages[0].content);
   return { messages, client: { name: harness, ...context, transcript_partial: partial, transcript_bytes: bounded.bytes,
-    transcript_read_bytes: bounded.read, ...(legacy ? { transcript_format: 'kimi-legacy-wire', newer_format_verified: false } : {}), ...counters } };
+    transcript_read_bytes: bounded.read, ...(legacy ? { transcript_format: 'kimi-legacy-wire', newer_format_verified: false } : {}),
+    ...(inferred ? { transcript_format: `${harness}-jsonl-inferred`, format_verified: false,
+      capture_note: 'Dialect inferred from third-party observations, not verified against a live host session.' } : {}),
+    ...counters } };
 }
 
 /** SessionEnd is deliberately delegated to the caller's durable reference queue, without filesystem/network work. */
 export async function checkpointSession({ payload, host, repo, stateDir, request }) {
   if (cloudExecutionIdentity()) return { saved: false, unsupported: true,
     reason: 'Cloud transcript checkpoints require a private owner-bound storage door; visible event streaming remains separate.' };
-  if (host === 'cursor') return { saved: false, unsupported: true, reason: 'Cursor transcript dialect is not verified' };
   if (payload.hook_event_name === 'SessionEnd') return { saved: false, deferred: true };
   if (!safeSession(payload.session_id)) throw new Error('invalid host session identity');
   const child = payload.hook_event_name === 'SubagentStop';

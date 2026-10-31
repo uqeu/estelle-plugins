@@ -68,7 +68,7 @@ export async function drainOne(stateDir, request) {
     await writeJson(cursorPath, { last: name });
     const path = join(stateDir, 'deferred', name);
     const item = await readJson(path, 16_000);
-    if (!['claude-code', 'codex', 'kimi', 'grok'].includes(item.host)) throw new Error('unsupported_host');
+    if (!['claude-code', 'codex', 'kimi', 'grok', 'cursor'].includes(item.host)) throw new Error('unsupported_host');
     const repo = repository(item.payload.cwd);
     const payload = { ...item.payload, hook_event_name: 'Stop' };
     if (item.host === 'kimi') {
@@ -159,10 +159,6 @@ export async function handleHook({ host, payload, stateDir, request }) {
     contextRequest = await beginContext(grokContextPath, n.turnId);
   }
   if (n.event === 'SessionEnd' || n.event === 'Interrupt') {
-    if (host === 'cursor') {
-      await recordStatus(stateDir, { host, event: n.event, mode: 'checkpoint', status: 'partial', code: 'unsupported_host' });
-      return null;
-    }
     await deferSession(n, stateDir);
     return null;
   }
