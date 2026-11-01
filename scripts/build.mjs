@@ -19,6 +19,16 @@ const manifest = { name: 'estelle', version, description };
 const marketplace = host => ({ name: 'estelle-plugins', owner: { name: 'Fate Labs' },
   plugins: [{ name: 'estelle', source: `./plugins/${host}` }] });
 emit('runtime/version.mjs', `// Generated from package.json by scripts/build.mjs.\nexport const VERSION = '${version}';\n`);
+// Only release metadata is generated in these otherwise hand-authored install documents.
+for (const [file, pattern, replacement] of [
+  ['README.md', /^Version: `\d+\.\d+\.\d+`\.$/gm, `Version: \`${version}\`.`],
+  ['docs/install/grok.md', /^grok plugin install uqeu\/estelle-plugins@v\d+\.\d+\.\d+#plugins\/grok$/gm,
+    `grok plugin install uqeu/estelle-plugins@v${version}#plugins/grok`],
+]) {
+  const source = await readFile(join(root, file), 'utf8');
+  if ([...source.matchAll(pattern)].length !== 1) throw new Error(`Release metadata anchor missing or repeated: ${file}`);
+  emit(file, source.replace(pattern, replacement));
+}
 emit('.claude-plugin/marketplace.json', marketplace('claude'));
 emit('.agents/plugins/marketplace.json', marketplace('codex'));
 emit('.grok-plugin/marketplace.json', { name: 'estelle-plugins', plugins: [{ name: 'estelle', source: './plugins/grok' }] });
@@ -39,12 +49,16 @@ emit('plugins/codex/.codex-plugin/plugin.json', { ...manifest, skills: './skills
 emit('plugins/codex/.mcp.json', { mcpServers: { Estelle: server } });
 emit('plugins/codex/hooks/hooks.json', nativeHooks('codex', 'PLUGIN_ROOT', [...common, 'Interrupt',
   'PreModelRequest', 'PostModelRequest']));
-emit('plugins/kimi/kimi.plugin.json', { ...manifest, skills: ['./skills'], commands: ['./commands'],
+const kimiManifest = { ...manifest, skills: ['./skills'], commands: ['./commands'],
   sessionStart: { skill: 'estelle' },
   mcpServers: { Estelle: { transport: 'http', url: server.url, bearerTokenEnvVar: 'ESTELLE_API_KEY' } },
   hooks: [...common.filter(event => event !== 'SubagentStart'), 'Interrupt']
     .map(event => ({ event, command: command('kimi', 'KIMI_PLUGIN_ROOT'), timeout: ['SessionEnd', 'Interrupt'].includes(event) ? 3 : 20 })),
-});
+};
+emit('plugins/kimi/kimi.plugin.json', kimiManifest);
+// GitHub archives expose only their repository root to Kimi; keep the same canonical assets.
+// An explicit empty list prevents Kimi's fallback from discovering the root's Claude-only agents.
+emit('kimi.plugin.json', { ...kimiManifest, agents: [] });
 emit('plugins/grok/plugin.json', { ...manifest, skills: './skills', commands: './commands',
   hooks: './hooks/hooks.json', mcpServers: './.mcp.json' });
 emit('plugins/grok/.mcp.json', { mcpServers: { Estelle: server } });
@@ -75,7 +89,7 @@ async function inventory(directory, prefix = '') {
 const digest = async path => statSync(path).isDirectory() ? inventory(path)
   : new Map([['file', createHash('sha256').update(await readFile(path)).digest('hex')]]);
 if (!check) {
-  // Regenerate the distribution only; source/runtime/tests and user installations are untouched.
+  // Regenerate derived packages and release metadata; user installations are untouched.
   await rm(join(root, 'plugins'), { recursive: true, force: true });
   for (const file of ['.claude-plugin/plugin.json', '.codex-plugin', '.mcp.claude.json', '.mcp.codex.json', 'hooks', 'kimi.plugin.json']) {
     await rm(join(root, file), { recursive: true, force: true });

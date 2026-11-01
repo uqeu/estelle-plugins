@@ -136,7 +136,7 @@ export function apiClient({ env = process.env, fetchImpl = fetch, timeoutMs = RE
 
 const ERROR_CODES = new Set(['credential_missing', 'invalid_api_url', 'invalid_route',
   'request_size', 'response_size', 'response_json', 'state_size', 'input_size', 'input_json',
-  'event_missing', 'session_missing', 'transcript_missing', 'unsupported_host', 'state_inside_bundle']);
+  'event_missing', 'session_missing', 'transcript_missing', 'unsupported_host', 'state_inside_bundle', 'context_claim_locked']);
 
 export function errorCode(error) {
   if (Number.isInteger(error?.status)) return `http_${error.status}`;

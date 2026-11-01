@@ -3,8 +3,12 @@
 Estelle for Claude Code, Codex, Kimi Code, Grok Build and Cursor. Each host has its own package
 under `plugins/`. They connect to `https://api.fatelabs.ca/mcp`.
 
-Requires Node.js 22 or later and `ESTELLE_API_KEY` in the agent's environment. Hooks and MCP use
-the same key. No Estelle CLI installation is needed. Version: `0.0.3`.
+Install your coding host first. External Node.js 22+ and a valid `ESTELLE_API_KEY` from your Estelle
+account must be available to the actual host process; hooks and MCP use the same key. GUI apps on
+macOS and Windows may not inherit your terminal environment. The plugin does not install the host or
+Node, or create an account. No backend clone or Estelle CLI is needed.
+
+Version: `0.0.5`.
 
 | Host | Install instructions and copy/paste setup prompt |
 |---|---|
@@ -40,7 +44,7 @@ Install or update Estelle for Codex from https://github.com/uqeu/estelle-plugins
 <summary>Kimi Code</summary>
 
 ```text
-Install or update Estelle for Kimi Code from https://github.com/uqeu/estelle-plugins using plugins/kimi. Run the native install from this clone, including when reinstalling the same version. Follow docs/install/kimi.md and docs/migration/from-cli.md. Preserve unrelated settings and active sessions; remove only verified legacy Estelle hook/MCP registrations. Never request or display credentials. Use native approval and a fresh session. Verify authentication with one advertised read-only MCP tool, then report package, MCP and hooks separately, with any pending step. Never run kimi -p '/plugins …' or spawn nested model installation tests. If you cannot operate the interactive TUI, prepare/check the clone and give me one exact /plugins install command with its absolute path; report native installation pending.
+Check that Kimi Code is installed and that its actual process can find external Node.js 22+ and ESTELLE_API_KEY from my Estelle account; report any missing prerequisite without printing the key. Install Estelle with the native interactive command /plugins install https://github.com/uqeu/estelle-plugins. Follow docs/install/kimi.md and docs/migration/from-cli.md. For a fresh Estelle registration, use /plugins remove estelle and /reload first; preserve chats, unrelated settings, other hosts and shared memories. Use native approval and /reload after installation. Keep hooks and MCP on the same environment key; never request or display credentials. Verify authentication with one advertised read-only MCP tool, then report package, MCP and hooks separately, with any pending step. Do not run kimi -p '/plugins …' or launch a model turn as an installation test. If you cannot operate the interactive TUI, give me the exact GitHub install command and report installation pending.
 ```
 
 </details>

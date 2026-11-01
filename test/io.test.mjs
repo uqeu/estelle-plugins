@@ -78,7 +78,7 @@ test('credential partitions prevent replaying saved batches under a different ac
 test('CLI invalid state override fails open without writing into the bundle or producing a hook failure exit', async t => {
   const f = await fixture(t);
   const bundle = await realpath(resolve(import.meta.dirname, '..'));
-  const env = { ...process.env, HOME: f.directory, ESTELLE_PLUGIN_DATA: bundle };
+  const env = { ...process.env, HOME: f.directory, USERPROFILE: f.directory, ESTELLE_PLUGIN_DATA: bundle };
   delete env.ESTELLE_API_KEY;
   delete env.ESTELLE_KEY;
   const before = (await readdir(bundle)).sort();
