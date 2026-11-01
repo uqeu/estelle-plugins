@@ -13,12 +13,30 @@ export async function beginContext(path, turnId) {
 }
 
 async function removeEmpty(path) {
-  try { await rmdir(path); }
-  catch (error) { if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(error.code)) throw error; }
+  for (let attempt = 0; attempt < CLAIM_ATTEMPTS; attempt++) {
+    try { await rmdir(path); return; }
+    catch (error) {
+      if (['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(error.code)) return;
+      if (!['EPERM', 'EACCES'].includes(error.code) || attempt === CLAIM_ATTEMPTS - 1) throw error;
+    }
+    await setTimeout(CLAIM_RETRY_MS);
+  }
+}
+
+// Idempotent cleanup only; dead-owner election must keep its raw unlink winner check.
+async function unlinkOwned(path) {
+  for (let attempt = 0; attempt < CLAIM_ATTEMPTS; attempt++) {
+    try { await unlink(path); return; }
+    catch (error) {
+      if (error.code === 'ENOENT') return;
+      if (!['EPERM', 'EACCES'].includes(error.code) || attempt === CLAIM_ATTEMPTS - 1) throw error;
+    }
+    await setTimeout(CLAIM_RETRY_MS);
+  }
 }
 
 async function releaseGuard(path, owner) {
-  await unlink(`${path}/${owner}`);
+  await unlinkOwned(`${path}/${owner}`);
   await removeEmpty(path);
 }
 
@@ -68,7 +86,12 @@ async function guardedRename(path, claimed) {
     try { await rename(candidate, guard); published = true; }
     catch (error) {
       if (!['EEXIST', 'ENOTEMPTY', 'EPERM', 'EACCES'].includes(error.code)) throw error;
-      const observed = await reclaimGuard(guard);
+      let observed;
+      try { observed = await reclaimGuard(guard); }
+      catch (inspectionError) {
+        if (!['EPERM', 'EACCES'].includes(inspectionError.code)) throw inspectionError;
+        return { error: inspectionError };
+      }
       // Windows may report a conflict just before its owner removes the guard.
       // Retry that ambiguity, but retain a persistent permission error verbatim.
       if (!observed && ['EPERM', 'EACCES'].includes(error.code)) return { error };
@@ -79,8 +102,7 @@ async function guardedRename(path, claimed) {
     finally { await releaseGuard(guard, owner); }
   } finally {
     if (!published) {
-      try { await unlink(`${candidate}/${owner}`); }
-      catch (error) { if (error.code !== 'ENOENT') throw error; }
+      await unlinkOwned(`${candidate}/${owner}`);
       await removeEmpty(candidate);
     }
   }
