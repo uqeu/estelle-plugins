@@ -1,4 +1,4 @@
-import { rename, link, unlink } from 'node:fs/promises';
+import { mkdir, writeFile, opendir, lstat, rmdir, rename, link, unlink } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { setTimeout } from 'node:timers/promises';
 import { readJson, writeJson } from './io.mjs';
@@ -12,14 +12,89 @@ export async function beginContext(path, turnId) {
   return requestId;
 }
 
-async function claim(path, retry) {
-  for (let attempt = 0; attempt < (retry ? CLAIM_ATTEMPTS : 1); attempt++) {
-    const claimed = `${path}.${randomUUID()}.claimed`;
-    try { await rename(path, claimed); return claimed; }
+async function removeEmpty(path) {
+  try { await rmdir(path); }
+  catch (error) { if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(error.code)) throw error; }
+}
+
+async function releaseGuard(path, owner) {
+  await unlink(`${path}/${owner}`);
+  await removeEmpty(path);
+}
+
+async function guardOwner(path) {
+  const info = await lstat(path);
+  if (!info.isDirectory() || info.isSymbolicLink()) return null;
+  const directory = await opendir(path, { bufferSize: 2 });
+  const names = [];
+  // A legitimate published guard has exactly one regular PID+opaque-token owner.
+  // Look at at most two entries; never enumerate or recursively remove unknown state.
+  for await (const entry of directory) {
+    if (!entry.isFile() || entry.isSymbolicLink() || names.length === 1) return null;
+    names.push(entry.name);
+  }
+  if (!names.length) return '';
+  const match = /^([1-9][0-9]{0,9})\.([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.owner$/.exec(names[0]);
+  if (!match || Number(match[1]) > 2_147_483_647) return null;
+  return { name: names[0], pid: Number(match[1]) };
+}
+
+async function reclaimGuard(path) {
+  let owner;
+  try { owner = await guardOwner(path); }
+  catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+  if (owner === '') { await removeEmpty(path); return true; }
+  if (!owner) return true;
+  try { process.kill(owner.pid, 0); return true; }
+  catch (error) { if (error.code !== 'ESRCH') return true; }
+  // Only the unlink winner may attempt rmdir. A stale observer must not remove
+  // a replacement owner; its different opaque filename makes this unlink fail.
+  try { await unlink(`${path}/${owner.name}`); }
+  catch (error) { if (error.code === 'ENOENT') return true; throw error; }
+  await removeEmpty(path);
+  return true;
+}
+
+async function guardedRename(path, claimed) {
+  const guard = `${path}.claim-lock`;
+  const token = randomUUID();
+  const candidate = `${path}.${token}.claim-candidate`;
+  const owner = `${process.pid}.${token}.owner`;
+  try { await mkdir(candidate, { mode: 0o700 }); }
+  catch (error) { if (error.code === 'ENOENT') return 'missing'; throw error; }
+  let published = false;
+  try {
+    await writeFile(`${candidate}/${owner}`, '', { flag: 'wx', mode: 0o600 });
+    try { await rename(candidate, guard); published = true; }
     catch (error) {
-      if (error.code !== 'ENOENT') throw error;
-      if (retry) await setTimeout(CLAIM_RETRY_MS);
+      if (!['EEXIST', 'ENOTEMPTY', 'EPERM', 'EACCES'].includes(error.code)) throw error;
+      const observed = await reclaimGuard(guard);
+      // Windows may report a conflict just before its owner removes the guard.
+      // Retry that ambiguity, but retain a persistent permission error verbatim.
+      if (!observed && ['EPERM', 'EACCES'].includes(error.code)) return { error };
+      return 'busy';
     }
+    try { await rename(path, claimed); return 'claimed'; }
+    catch (error) { if (error.code !== 'ENOENT') throw error; return 'missing'; }
+    finally { await releaseGuard(guard, owner); }
+  } finally {
+    if (!published) {
+      try { await unlink(`${candidate}/${owner}`); }
+      catch (error) { if (error.code !== 'ENOENT') throw error; }
+      await removeEmpty(candidate);
+    }
+  }
+}
+
+async function claim(path, retry) {
+  for (let attempt = 0; attempt < CLAIM_ATTEMPTS; attempt++) {
+    const claimed = `${path}.${randomUUID()}.claimed`;
+    const result = await guardedRename(path, claimed);
+    if (result === 'claimed') return claimed;
+    if (result === 'missing' && !retry) return null;
+    if (result === 'busy' && attempt === CLAIM_ATTEMPTS - 1) throw new Error('context_claim_locked');
+    if (typeof result === 'object' && attempt === CLAIM_ATTEMPTS - 1) throw result.error;
+    await setTimeout(CLAIM_RETRY_MS);
   }
   return null;
 }
