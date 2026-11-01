@@ -2,7 +2,7 @@
 import { open, mkdir, stat, readFile, writeFile, rename, unlink, opendir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { cap, sanitize } from './redact.mjs';
+import { cap, sanitize, FIELD_CAP } from './redact.mjs';
 import { timelineIdentity } from './identity.mjs';
 import { normalizeKimiRecord } from './kimi-history.mjs';
 
@@ -127,13 +127,83 @@ function claudeAttachment(entry, notes, child) {
     { source: 'estelle-hook', hook, output: cap(mine.join('\n\n')), parts: mine.length })];
 }
 
+// Core rollout schema, not app-server v2: openai/codex rust-v0.166.0
+// protocol/src/items.rs (TurnItem) and protocol/src/protocol.rs (FileChange).
+// Stateless metadata artifacts do not claim canonical commands, edits, PR links or semantic deduplication.
+const NATIVE_COMPLETION_STATUSES = new Set(['completed', 'failed', 'declined']);
+const nativeText = (value, limit = FIELD_CAP) => typeof value === 'string' && value.length > 0 && value.length <= limit ? value : null;
+
+function nativeCommandMetadata(item, unavailable) {
+  const argv = Array.isArray(item.command) && item.command.length > 0 && item.command.length <= LIMITS.messageBlocks
+    && item.command.every(value => typeof value === 'string')
+    && item.command.reduce((n, value) => n + value.length, 0) <= FIELD_CAP ? item.command : null;
+  const cwd = nativeText(item.cwd);
+  const recorded = Number.isInteger(item.exit_code) && item.exit_code >= -2147483648 && item.exit_code <= 2147483647;
+  const exitState = recorded ? 'recorded' : item.exit_code == null ? 'unrecorded' : 'invalid';
+  if (argv === null) unavailable.push('argv');
+  if (cwd === null) unavailable.push('cwd');
+  if (!recorded) unavailable.push('exit_code');
+  return { argv, cwd, exit_code: recorded ? item.exit_code : null, exit_code_state: exitState };
+}
+
+function nativeChangesMetadata(item, unavailable) {
+  const changes = item.changes;
+  const paths = changes && typeof changes === 'object' && !Array.isArray(changes) ? Object.keys(changes) : null;
+  if (paths === null || paths.length > LIMITS.messageBlocks) {
+    unavailable.push('changes');
+    return { changes: null, change_count: null };
+  }
+  const rows = [];
+  let chars = 0;
+  for (const path of paths) {
+    const change = changes[path];
+    const kind = change?.type;
+    const move = kind === 'update' ? change.move_path : null;
+    const body = kind === 'update' ? change?.unified_diff : change?.content;
+    chars += path.length + (typeof move === 'string' ? move.length : 0);
+    if (!path || chars > FIELD_CAP || !['add', 'delete', 'update'].includes(kind)
+        || typeof body !== 'string' || (kind === 'update' && move !== null && typeof move !== 'string')) {
+      unavailable.push('changes');
+      return { changes: null, change_count: null };
+    }
+    rows.push({ path, change_type: kind, move_path: move });
+  }
+  return { changes: rows, change_count: rows.length };
+}
+
+function nativeCompletion(item, id, at) {
+  if (!item || !['CommandExecution', 'FileChange'].includes(item.type)) return [];
+  const unavailable = [];
+  const nativeId = nativeText(item.id, 200);
+  const status = NATIVE_COMPLETION_STATUSES.has(item.status) ? item.status : null;
+  if (nativeId === null) unavailable.push('native_id');
+  if (status === null) unavailable.push('status');
+  const detail = item.type === 'CommandExecution' ? nativeCommandMetadata(item, unavailable) : nativeChangesMetadata(item, unavailable);
+  let completion = 'unknown';
+  if (unavailable.length === 0) {
+    completion = status === 'completed' ? 'succeeded' : status;
+    if (item.type === 'CommandExecution' && ((status === 'completed' && detail.exit_code !== 0)
+        || (status === 'failed' && detail.exit_code === 0))) completion = 'inconsistent';
+  }
+  return [event(`${id}:0`, 'artifact', agent('codex'), at, sanitize({
+    title: item.type === 'CommandExecution' ? 'Codex command completion recorded' : 'Codex file-change completion recorded',
+    source: 'codex.event_msg.item_completed', schema: 'codex-rust-v0.166.0', native_type: item.type,
+    native_id: nativeId, status, completion, ...detail, metadata_complete: unavailable.length === 0,
+    unavailable_fields: unavailable, capture_scope: 'native completion metadata only; canonical work and PR association unverified',
+    output_stored: false, diff_stored: false,
+  }))];
+}
+
 export function mapCodex(record, offset, notes = {}) {
   if (!record || !validTime(record.timestamp)) return [];
   const at = record.timestamp;
   const id = `r${offset}`;
   const item = record.payload ?? record;
-  if (record.type === 'event_msg') return ['task_complete', 'turn_aborted'].includes(item.type)
-    ? [lifecycle(`${id}:turn-end`, at, 'waiting_for_review', 'input_required')] : [];
+  if (record.type === 'event_msg') {
+    if (item.type === 'item_completed') return nativeCompletion(item.item, id, at);
+    return ['task_complete', 'turn_aborted'].includes(item.type)
+      ? [lifecycle(`${id}:turn-end`, at, 'waiting_for_review', 'input_required')] : [];
+  }
   if (record.type !== 'response_item' && record.payload) return [];
   if (item.type === 'message') {
     if (!['user', 'assistant'].includes(item.role)) return [];
