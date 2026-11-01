@@ -16,6 +16,19 @@ This table describes packaged paths, not a claim that a particular installation 
 package loading, MCP authentication and actual hook execution separately. Successful empty recall
 adds no context; failures retain a separate local status and supported context-bearing errors.
 
+## Operating systems and verification
+
+Compatibility depends on both the coding host and the operating system. Use the host's supported
+installation and make Node.js 22+ and `ESTELLE_API_KEY` available to that actual process. A terminal
+environment check does not establish that a GUI app inherited the same settings.
+
+GitHub Actions runs the shared Node build and tests on Ubuntu, macOS and Windows. Estelle CI uses
+the explicit Linux job in `.estelle/ci.yml` because its workflow parser does not support GitHub's
+matrix strategy. That Linux job does not replace the three GitHub Actions jobs or certify Windows
+or macOS. A passing shared Node suite also does not certify native installation, authentication
+and hooks across all fifteen host/OS combinations. Windows skips for POSIX-only filesystem cases
+do not establish equivalent Windows ACL protection.
+
 Hooks require a usable `ESTELLE_API_KEY`; a separate MCP OAuth login does not establish hook
 identity. Captures omit media bytes and private/encrypted reasoning. Bounds, missing transcripts,
 queued uploads and unsupported formats are not complete history.
