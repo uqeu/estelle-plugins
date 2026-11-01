@@ -8,7 +8,9 @@ account must be available to the actual host process; hooks and MCP use the same
 macOS and Windows may not inherit your terminal environment. The plugin does not install the host or
 Node, or create an account. No backend clone or Estelle CLI is needed.
 
-Version: `0.0.5`.
+Version: `0.0.6`.
+
+[Release notes](docs/releases/v0.0.6.md)
 
 | Host | Install instructions and copy/paste setup prompt |
 |---|---|

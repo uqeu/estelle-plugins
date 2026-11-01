@@ -325,3 +325,139 @@ test('an empty inferred-dialect transcript sends nothing and a missing file fail
   await assert.rejects(streamSession(f.options), /ENOENT/);
   assert.equal(f.calls.length, 0);
 });
+
+
+// Rollout schema: openai/codex rust-v0.166.0 protocol/src/items.rs + protocol.rs.
+// These PascalCase/snake_case records are NOT the app-server v2 camelCase projection.
+const completed = item => ({ timestamp: AT, type: 'event_msg', payload: { type: 'item_completed', item } });
+const nativeCommand = extra => ({ type: 'CommandExecution', id: 'native-call', command: ['gh', 'pr', 'create'],
+  cwd: 'file:///workspace', status: 'completed', exit_code: 0, aggregated_output: 'https://github.com/fixture/repository/pull/1', ...extra });
+
+test('Codex native completion records typed command provenance without canonical work or output', () => {
+  const [out] = mapCodex(completed(nativeCommand()), 120);
+  assert.equal(out.event_id, 'r120:0');
+  assert.equal(out.kind, 'artifact');
+  assert.equal(out.payload.native_id, 'native-call');
+  assert.deepEqual(out.payload.argv, ['gh', 'pr', 'create']);
+  assert.equal(out.payload.cwd, 'file:///workspace');
+  assert.equal(out.payload.status, 'completed');
+  assert.equal(out.payload.exit_code, 0);
+  assert.equal(out.payload.metadata_complete, true);
+  assert.equal(out.payload.source, 'codex.event_msg.item_completed');
+  assert.equal(out.payload.schema, 'codex-rust-v0.166.0');
+  for (const forbidden of ['pr_url', 'output', 'aggregated_output', 'command', 'diff']) assert.ok(!Object.hasOwn(out.payload, forbidden));
+  assert.equal(JSON.stringify(out).includes('github.com'), false);
+});
+
+test('Codex native completion preserves failure and unknown rather than inventing success', () => {
+  const failed = mapCodex(completed(nativeCommand({ status: 'failed', exit_code: 7 })), 1)[0].payload;
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.exit_code, 7);
+  assert.equal(failed.completion, 'failed');
+  for (const exit_code of [null, undefined, false, '0', 0.5]) {
+    const result = mapCodex(completed(nativeCommand({ exit_code })), 2)[0].payload;
+    assert.equal(result.exit_code, null);
+    assert.equal(result.completion, 'unknown');
+  }
+  assert.equal(mapCodex(completed(nativeCommand({ status: 'failed', exit_code: 0 })), 3)[0].payload.completion, 'inconsistent');
+  assert.equal(mapCodex(completed(nativeCommand({ status: 'completed', exit_code: 7 })), 4)[0].payload.completion, 'inconsistent');
+  assert.equal(mapCodex(completed(nativeCommand({ status: 'new-unknown-status' })), 5)[0].payload.status, null);
+});
+
+test('Codex native completion bounds malformed command metadata explicitly', () => {
+  for (const extra of [{ id: '' }, { id: 'x'.repeat(201) }, { command: 'gh pr create' },
+    { command: ['x'.repeat(20_001)] }, { command: Array(101).fill('x') }, { command: ['x', null] }, { cwd: [] }]) {
+    const [out] = mapCodex(completed(nativeCommand(extra)), 20);
+    assert.equal(out.kind, 'artifact');
+    assert.equal(out.payload.metadata_complete, false);
+    assert.ok(out.payload.unavailable_fields.length > 0);
+    assert.ok(Buffer.byteLength(JSON.stringify(out)) < 200_000);
+  }
+});
+
+test('Codex native completion retains only known FileChange metadata, never edit ownership or content', () => {
+  const item = { type: 'FileChange', id: 'native-patch', status: 'completed', changes: {
+    'src/add.js': { type: 'add', content: 'PRIVATE_ADDED_CONTENT' },
+    'src/delete.js': { type: 'delete', content: 'PRIVATE_DELETED_CONTENT' },
+    'src/update.js': { type: 'update', unified_diff: 'PRIVATE_DIFF', move_path: 'src/moved.js' },
+  }, stdout: 'PRIVATE_STDOUT', stderr: 'PRIVATE_STDERR', reasoning: 'PRIVATE_REASONING' };
+  const [out] = mapCodex(completed(item), 100);
+  assert.equal(out.kind, 'artifact');
+  assert.equal(out.payload.native_id, 'native-patch');
+  assert.equal(out.payload.metadata_complete, true);
+  assert.deepEqual(out.payload.changes, [
+    { path: 'src/add.js', change_type: 'add', move_path: null },
+    { path: 'src/delete.js', change_type: 'delete', move_path: null },
+    { path: 'src/update.js', change_type: 'update', move_path: 'src/moved.js' },
+  ]);
+  assert.ok(!JSON.stringify(out).includes('PRIVATE_'));
+  assert.ok(!Object.hasOwn(out.payload, 'pr_url'));
+});
+
+test('Codex native completion refuses guessed FileChange shapes and oversized paths', () => {
+  for (const changes of [[], null, { x: { type: 'unknown', content: 'x' } },
+    { x: { type: 'add', content: false } }, { x: { type: 'update', unified_diff: 'x', move_path: false } },
+    { ['x'.repeat(20_001)]: { type: 'delete', content: 'x' } },
+    Object.fromEntries(Array.from({ length: 101 }, (_, n) => ['p'+n, { type: 'add', content: 'x' }]))]) {
+    const [out] = mapCodex(completed({ type: 'FileChange', id: 'patch', status: 'completed', changes }), 1);
+    assert.equal(out.payload.metadata_complete, false);
+    assert.equal(out.payload.changes, null);
+  }
+});
+
+test('Codex native completion never inspects private reasoning or replaces response-item fallback', () => {
+  assert.deepEqual(mapCodex(completed({ type: 'Reasoning', encrypted_content: 'PRIVATE' }), 1), []);
+  const call = mapCodex(rollout({ type: 'function_call', namespace: 'functions', name: 'exec_command', call_id: 'native-call', arguments: '{"cmd":"gh pr create"}' }), 10);
+  const native = mapCodex(completed(nativeCommand()), 20);
+  const result = mapCodex(rollout({ type: 'function_call_output', call_id: 'native-call', output: 'fallback output' }), 30);
+  assert.equal(call[0].kind, 'tool_call');
+  assert.equal(result[0].kind, 'tool_result');
+  assert.equal(result[0].payload.output, 'fallback output');
+  assert.deepEqual([...call, ...native, ...result].map(x => x.event_id), ['r10:0', 'r20:0', 'r30:0']);
+  assert.equal([...call, ...native, ...result].filter(x => ['command', 'edit'].includes(x.kind)).length, 0);
+});
+
+test('Codex native completion uses existing ACK cursor/spool and server replay identity without new state', async t => {
+  const f = await fixture(t, 'codex');
+  const records = [rollout({ type: 'function_call', name: 'exec_command', call_id: 'native-call', arguments: '{"cmd":"gh pr create"}' }),
+    completed(nativeCommand()), rollout({ type: 'function_call_output', call_id: 'native-call', output: 'fallback output' })];
+  await writeFile(f.transcript, records.map(line).join(''));
+  const server = new Map();
+  let requests = 0;
+  f.options.request = async (path, body) => {
+    requests++;
+    for (const event of body.events) {
+      const serialized = JSON.stringify(event);
+      if (server.has(event.event_id)) assert.equal(server.get(event.event_id), serialized);
+      else server.set(event.event_id, serialized);
+    }
+    if (requests === 1) throw Object.assign(new Error('fixture lost ACK after commit'), { status: 503 });
+    return { accepted: body.events.length };
+  };
+  const pending = await streamSession(f.options);
+  assert.equal(pending.pending, true);
+  assert.equal(JSON.parse(await readFile(f.state, 'utf8')).offset, 0);
+  const saved = await streamSession(f.options);
+  assert.equal(saved.pending, undefined);
+  assert.equal(server.size, 4); // started, original call, native artifact, original result
+  assert.equal([...server.values()].map(JSON.parse).filter(e => e.kind === 'artifact').length, 1);
+  const state = JSON.parse(await readFile(f.state, 'utf8'));
+  assert.equal(state.offset, Buffer.byteLength(records.map(line).join('')));
+  assert.ok(!Object.keys(state).some(key => /codex|correlat|tombstone/.test(key)));
+  assert.equal((await streamSession(f.options)).sent, 0);
+});
+
+
+test('Codex native completion reuses existing credential filtering without storing hidden bodies', () => {
+  const existingFixture = 'fixture estelle_live_abcdefgh1234'; // same non-authentic redaction fixture above
+  const [command] = mapCodex(completed(nativeCommand({ command: ['echo', existingFixture], encrypted_content: 'DO_NOT_CAPTURE_PRIVATE' })), 1);
+  assert.ok(!JSON.stringify(command).includes('estelle_live_abcdefgh1234'));
+  assert.match(JSON.stringify(command), /redacted estelle key/);
+  assert.ok(!JSON.stringify(command).includes('DO_NOT_CAPTURE_PRIVATE'));
+  for (const status of ['failed', 'declined', null, 'in_progress']) {
+    const [change] = mapCodex(completed({ type: 'FileChange', id: 'patch', status, changes: {} }), 2);
+    assert.equal(change.kind, 'artifact');
+    assert.equal(change.payload.status, ['failed', 'declined'].includes(status) ? status : null);
+    assert.equal(change.payload.metadata_complete, ['failed', 'declined'].includes(status));
+  }
+});
