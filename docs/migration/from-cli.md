@@ -40,4 +40,5 @@ without printing it or invoking the CLI. For Cursor, start the application with 
 `ESTELLE_API_KEY` available to its process; do not put it in a shared plugin variable.
 
 Version 0.0.1 used a combined package. Update Claude/Codex through the refreshed marketplace;
-reinstall Kimi from `plugins/kimi`. Project `AGENTS.md` and `CLAUDE.md` are not overwritten.
+reinstall Estelle for Kimi using the [native GitHub guide](../install/kimi.md).
+Project `AGENTS.md` and `CLAUDE.md` are not overwritten.
